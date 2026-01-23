@@ -745,6 +745,145 @@ CREATE TABLE friendships (
 
 ---
 
+## 8.5 DATABASE CHOICE TRADEOFFS (Non-Obvious Decisions)
+
+### Why Cassandra for Messages (Not MySQL)?
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  THE DECISION: CASSANDRA vs MYSQL FOR CHAT MESSAGES                         ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CASSANDRA WINS FOR CHAT BECAUSE:                                            ║
+║  ─────────────────────────────────                                           ║
+║                                                                               ║
+║  1. WRITE-HEAVY WORKLOAD                                                     ║
+║     • Chat: Billions of messages/day (WhatsApp: 65B/day)                    ║
+║     • Cassandra: LSM tree = O(1) writes, no read-before-write               ║
+║     • MySQL: B-tree = O(log N) writes, locks, slower at scale               ║
+║                                                                               ║
+║  2. TIME-SERIES ACCESS PATTERN                                               ║
+║     • Query: "Get messages for user X after timestamp Y"                    ║
+║     • Cassandra: Partition by user, cluster by time = perfect!              ║
+║     • MySQL: Would need index scan, less efficient                          ║
+║                                                                               ║
+║  3. NO JOINS NEEDED                                                          ║
+║     • Messages are self-contained (sender_id, content, timestamp)           ║
+║     • Never need: SELECT * FROM messages JOIN users...                      ║
+║     • MySQL's JOINs = wasted capability                                     ║
+║                                                                               ║
+║  4. HORIZONTAL SCALING                                                       ║
+║     • Cassandra: Add nodes, auto-rebalance, linear scalability              ║
+║     • MySQL: Sharding is manual, complex, error-prone                       ║
+║                                                                               ║
+║  5. EVENTUAL CONSISTENCY IS OK                                               ║
+║     • Message arrives 1 second late? User won't notice.                     ║
+║     • No need for strict ACID on chat messages                              ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  MYSQL WOULD BE WRONG BECAUSE:                                               ║
+║  ─────────────────────────────                                               ║
+║     • Slower writes at massive scale                                        ║
+║     • Sharding is painful (cross-shard queries for group chats)            ║
+║     • ACID overhead we don't need                                           ║
+║     • Would need to shard anyway → lose JOIN capability                    ║
+║                                                                               ║
+║  INTERVIEW ANSWER:                                                           ║
+║  "Cassandra for messages because: (1) write-heavy - billions/day, LSM tree  ║
+║   is faster than B-tree, (2) time-series access - partition by user,        ║
+║   cluster by time, (3) no JOINs needed - messages are self-contained,       ║
+║   (4) linear horizontal scaling. MySQL would struggle at this write volume  ║
+║   and we'd end up sharding it anyway, losing the JOIN benefits."            ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+### Why Kafka (Not Just Direct Delivery)?
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  THE DECISION: WHY KAFKA BETWEEN CHAT SERVERS?                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  WITHOUT KAFKA (Direct Server-to-Server):                                    ║
+║  ─────────────────────────────────────────                                   ║
+║                                                                               ║
+║  Chat Server 1 ───HTTP/gRPC───► Chat Server 2                               ║
+║                                                                               ║
+║  Problems:                                                                   ║
+║  ✗ If Server 2 is down → message LOST                                       ║
+║  ✗ Every server must know about every other server (N² connections)         ║
+║  ✗ No replay if consumer crashes                                            ║
+║  ✗ No persistence for offline users                                         ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  WITH KAFKA:                                                                 ║
+║  ───────────                                                                 ║
+║                                                                               ║
+║  Chat Server 1 ──► Kafka ──► Chat Server 2                                  ║
+║                      │                                                        ║
+║                      └──► Cassandra (persistence)                            ║
+║                      └──► Push Service (offline users)                       ║
+║                                                                               ║
+║  Benefits:                                                                   ║
+║  ✓ Server 2 down? Kafka holds message, delivers when back                   ║
+║  ✓ Decoupled: Servers don't know about each other                           ║
+║  ✓ Replay: Consumer crashes? Resume from last offset                        ║
+║  ✓ Multiple consumers: Same message → delivery + persistence + push         ║
+║  ✓ Ordering: Partition by recipient_id = ordered delivery                   ║
+║                                                                               ║
+║  INTERVIEW ANSWER:                                                           ║
+║  "Kafka between servers for: (1) durability - if recipient's server is      ║
+║   down, message waits in Kafka, (2) decoupling - servers don't need to      ║
+║   know each other, (3) multiple consumers - same event triggers delivery,   ║
+║   persistence to Cassandra, and push notifications, (4) replay - consumer   ║
+║   crashes can resume from offset."                                          ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+### Why Redis for Presence (Not Cassandra)?
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  THE DECISION: REDIS vs CASSANDRA FOR ONLINE STATUS                         ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  REDIS WINS FOR PRESENCE BECAUSE:                                            ║
+║  ─────────────────────────────────                                           ║
+║                                                                               ║
+║  1. TTL (Time-To-Live) BUILT-IN                                             ║
+║     • SET presence:user123 "online" EX 30                                   ║
+║     • Key auto-expires if no heartbeat → user is offline!                   ║
+║     • Cassandra: Need to manually query and check timestamps                ║
+║                                                                               ║
+║  2. PUB/SUB FOR REAL-TIME UPDATES                                           ║
+║     • Friend comes online → PUBLISH to subscribers instantly                ║
+║     • Cassandra: No pub/sub, need to poll                                   ║
+║                                                                               ║
+║  3. EPHEMERAL DATA                                                          ║
+║     • Online status doesn't need to persist forever                         ║
+║     • If Redis restarts, everyone just re-heartbeats                        ║
+║     • Cassandra: Optimized for durable, long-term storage                   ║
+║                                                                               ║
+║  4. SUB-MILLISECOND READS                                                   ║
+║     • "Is user online?" needs to be FAST                                    ║
+║     • Redis: In-memory = microseconds                                       ║
+║     • Cassandra: Disk-based = milliseconds                                  ║
+║                                                                               ║
+║  INTERVIEW ANSWER:                                                           ║
+║  "Redis for presence because: (1) TTL - heartbeat sets 30s expiry, key      ║
+║   auto-deletes if no heartbeat = user offline, (2) Pub/Sub - notify         ║
+║   friends instantly when status changes, (3) ephemeral - status doesn't     ║
+║   need durability, (4) speed - sub-millisecond for 'is user online?'"       ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 ## 9. Snowflake ID
 
 ```

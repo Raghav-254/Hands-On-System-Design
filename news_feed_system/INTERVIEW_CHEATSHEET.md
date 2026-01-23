@@ -377,6 +377,203 @@ ZREMRANGEBYRANK feed:123 0 -801
 
 ---
 
+## 5.5 DATABASE CHOICE TRADEOFFS (Non-Obvious Decisions)
+
+### Why MySQL for Posts (Not Cassandra)?
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  THE DECISION: MYSQL vs CASSANDRA FOR POSTS                                  ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  MYSQL IS REASONABLE FOR POSTS BECAUSE:                                      ║
+║  ───────────────────────────────────────                                     ║
+║                                                                               ║
+║  1. MODERATE WRITE VOLUME                                                    ║
+║     • Posts: Millions/day (not billions like chat)                          ║
+║     • MySQL handles this fine, especially with Redis caching reads          ║
+║                                                                               ║
+║  2. READS ARE CACHED                                                         ║
+║     • 99% of "get post by ID" → Redis PostCache                             ║
+║     • MySQL only hit on cache miss                                          ║
+║     • Read load on MySQL is manageable                                      ║
+║                                                                               ║
+║  3. RICH QUERIES FOR ADMIN/MODERATION                                       ║
+║     • "Find posts with banned words created this week"                      ║
+║     • "Posts by user X with > 10 reports"                                   ║
+║     • SQL is expressive for these ad-hoc queries                            ║
+║                                                                               ║
+║  4. FAMILIARITY & TOOLING                                                   ║
+║     • Engineers know SQL                                                    ║
+║     • Great ORMs, monitoring, backups                                       ║
+║     • Easier debugging                                                      ║
+║                                                                               ║
+║  IMPORTANT: ACID IS NOT THE REASON!                                         ║
+║  ─────────────────────────────────────                                       ║
+║  • "Create post + update count atomically" → eventual consistency is FINE   ║
+║  • Social media doesn't need banking-level transactions                     ║
+║  • Don't oversell the ACID argument in interviews!                          ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  WHY NOT CASSANDRA FOR POSTS?                                                ║
+║  ────────────────────────────                                                ║
+║  • Cassandra excels at WRITE-HEAVY (billions/day) → posts aren't that      ║
+║  • Cassandra lacks ad-hoc queries → moderation/admin is harder             ║
+║  • Would work, but MySQL + cache is simpler for this volume                ║
+║                                                                               ║
+║  INTERVIEW ANSWER:                                                           ║
+║  "MySQL for posts because: (1) moderate write volume - millions not         ║
+║   billions, (2) reads are cached in Redis anyway, (3) rich SQL for          ║
+║   moderation queries, (4) familiarity and tooling. ACID is not the reason   ║
+║   - social media is eventually consistent. At Facebook scale, they use      ║
+║   TAO (custom), but MySQL + cache works for most scales."                   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+### Why Kafka (Not Direct Service Calls)?
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  THE DECISION: WHY KAFKA BETWEEN POST SERVICE AND FANOUT SERVICE?           ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  WITHOUT KAFKA (Direct Call - Sync):                                         ║
+║  ────────────────────────────────────                                        ║
+║                                                                               ║
+║  PostService.createPost() {                                                  ║
+║      save(post);                                                            ║
+║      fanoutService.fanout(post);  // DIRECT CALL!                           ║
+║      return response;                                                        ║
+║  }                                                                           ║
+║                                                                               ║
+║  Problems:                                                                   ║
+║  ✗ If FanoutService is slow (celebrity with 10M followers) → API is slow   ║
+║  ✗ If FanoutService crashes → does post still exist? Inconsistent!         ║
+║  ✗ PostService is COUPLED to FanoutService                                  ║
+║  ✗ Can't add new consumers without changing PostService                    ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  WITH KAFKA (Async):                                                         ║
+║  ────────────────────                                                        ║
+║                                                                               ║
+║  PostService.createPost() {                                                  ║
+║      save(post);                                                            ║
+║      kafka.publish("post-events", event);  // ASYNC!                        ║
+║      return response;  // < 100ms                                           ║
+║  }                                                                           ║
+║                                                                               ║
+║  // Separate process:                                                        ║
+║  FanoutService polls Kafka, processes events                                ║
+║  NotificationService polls Kafka, sends push                                ║
+║                                                                               ║
+║  Benefits:                                                                   ║
+║  ✓ Fast API response (fanout happens in background)                        ║
+║  ✓ If FanoutService crashes → Kafka holds events, retry later              ║
+║  ✓ Decoupled: PostService doesn't know about consumers                     ║
+║  ✓ Add NotificationService → just subscribe, no code change in PostService ║
+║  ✓ Independent scaling: Fanout can have 100 instances, Post can have 10    ║
+║                                                                               ║
+║  INTERVIEW ANSWER:                                                           ║
+║  "Kafka between PostService and FanoutService for: (1) fast API - user gets ║
+║   response in <100ms, fanout happens async, (2) reliability - if fanout     ║
+║   fails, events wait in Kafka, (3) decoupling - PostService doesn't know    ║
+║   about consumers, (4) extensibility - added NotificationService without    ║
+║   changing PostService, just subscribed to same topic."                     ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+### Why Redis Sorted Sets for Feeds (Not MySQL)?
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  THE DECISION: WHY REDIS FOR NEWS FEED CACHE?                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  REDIS SORTED SET WINS BECAUSE:                                              ║
+║  ────────────────────────────────                                            ║
+║                                                                               ║
+║  1. PRE-COMPUTED = FAST READS                                               ║
+║     • "Get feed" = ZREVRANGE feed:user123 0 19                              ║
+║     • O(log N + M) where M = items returned                                 ║
+║     • No JOINs, no WHERE clauses, no sorting at read time                   ║
+║                                                                               ║
+║  2. AUTOMATIC ORDERING BY SCORE                                             ║
+║     • Score = timestamp (or ML ranking score)                               ║
+║     • Sorted set keeps items ordered automatically                          ║
+║     • MySQL: Need ORDER BY on every query                                   ║
+║                                                                               ║
+║  3. EASY SIZE LIMITS                                                        ║
+║     • ZREMRANGEBYRANK feed:user123 0 -801 → keep only 800 posts            ║
+║     • Auto-trims old posts                                                  ║
+║     • MySQL: Need scheduled cleanup jobs                                    ║
+║                                                                               ║
+║  4. ATOMIC OPERATIONS                                                       ║
+║     • ZADD is atomic - no race conditions                                   ║
+║     • Multiple fanout workers can ZADD to same feed safely                  ║
+║                                                                               ║
+║  WHY NOT MYSQL FOR FEEDS?                                                   ║
+║  ─────────────────────────                                                   ║
+║                                                                               ║
+║  MySQL approach:                                                             ║
+║  SELECT p.* FROM posts p                                                    ║
+║  JOIN follows f ON p.author_id = f.following_id                             ║
+║  WHERE f.user_id = 123                                                      ║
+║  ORDER BY p.created_at DESC LIMIT 20;                                       ║
+║                                                                               ║
+║  Problems:                                                                   ║
+║  ✗ JOIN on every read (expensive)                                           ║
+║  ✗ Can't do this across shards                                              ║
+║  ✗ Slow for users following many people                                     ║
+║                                                                               ║
+║  INTERVIEW ANSWER:                                                           ║
+║  "Redis sorted sets for feeds because: (1) pre-computed during fanout, so   ║
+║   reads are just ZREVRANGE - no JOINs, (2) automatic ordering by score,     ║
+║   (3) easy size limits with ZREMRANGEBYRANK, (4) works with sharding - each ║
+║   user's feed is independent. MySQL would need JOINs on every read, which   ║
+║   breaks when sharded."                                                     ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+### Comparison: Chat Messages vs Posts
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  WHY DIFFERENT DATABASES FOR CHAT vs NEWS FEED?                             ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  Aspect              Chat Messages         Posts (News Feed)                 ║
+║  ──────────────────  ────────────────────  ──────────────────────────────── ║
+║                                                                               ║
+║  Write volume        Billions/day          Millions/day                      ║
+║  DB for storage      Cassandra             MySQL + Redis cache               ║
+║  Why?                LSM tree = fast       Lower volume, cached reads        ║
+║                      writes at scale       MySQL is fine                     ║
+║                                                                               ║
+║  Access pattern      Time-series           Random by ID                      ║
+║                      "msgs after cursor"   "get post 123"                    ║
+║                                                                               ║
+║  JOINs needed?       No                    No (cached, app-level merge)      ║
+║  Complex queries?    No                    Yes (moderation/admin)            ║
+║  ACID needed?        No                    No (eventual consistency OK)      ║
+║                                                                               ║
+║  INTERVIEW ANSWER:                                                           ║
+║  "Chat uses Cassandra for write-heavy, time-series messages - billions/day, ║
+║   append-only. Posts use MySQL because volume is lower, reads are cached,   ║
+║   and we need SQL for moderation queries. Both avoid JOINs at read time -   ║
+║   chat by design (messages are self-contained), news feed by pre-computing  ║
+║   into Redis. Neither needs strict ACID - social media is eventually        ║
+║   consistent."                                                               ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
 ## 6. Architecture: Sync vs Async Fanout (Critical Interview Topic!)
 
 ### Approach 1: Synchronous (Simple but Coupled)
