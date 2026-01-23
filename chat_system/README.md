@@ -72,13 +72,13 @@ src/main/java/com/chatapp/
 
 ### Option 1: Using Maven
 ```bash
-cd "chat system"
+cd chat_system
 mvn compile exec:java
 ```
 
 ### Option 2: Using Java directly
 ```bash
-cd "chat system"
+cd chat_system
 javac -d target/classes src/main/java/com/chatapp/**/*.java
 java -cp target/classes com.chatapp.ChatSystemDemo
 ```

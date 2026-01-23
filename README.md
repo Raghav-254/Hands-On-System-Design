@@ -10,7 +10,7 @@ This repository contains hands-on implementations of popular system design probl
 
 | # | System | Description | Key Concepts | Cheatsheet |
 |---|--------|-------------|--------------|------------|
-| 1 | [Chat System](./chat%20system/) | WhatsApp/Discord-like messaging | WebSocket, Kafka, Cassandra, Presence | [View](./chat%20system/INTERVIEW_CHEATSHEET.md) |
+| 1 | [Chat System](./chat_system/) | WhatsApp/Discord-like messaging | WebSocket, Kafka, Cassandra, Presence | [View](./chat_system/INTERVIEW_CHEATSHEET.md) |
 
 ---
 
@@ -81,7 +81,7 @@ Hands on System Design/
 ├── README.md                    ← You are here (main entry point)
 ├── .gitignore                   ← Git ignore for all projects
 │
-├── chat system/                 ← Chat System
+├── chat_system/                 ← Chat System
 │   ├── README.md
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
