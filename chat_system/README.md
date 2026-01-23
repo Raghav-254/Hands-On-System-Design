@@ -43,29 +43,33 @@ This implementation is designed to help you:
 ```
 src/main/java/com/chatapp/
 ├── ChatSystemDemo.java          # Main demo - run this!
-├── models/
+├── MessageFlowDemo.java         # Message flow comparison demo
+├── InterviewNotes.java          # Comprehensive interview guide
+│
+├── models/                      # Data Models
 │   ├── User.java               # User model
 │   ├── Message.java            # 1:1 message model
 │   ├── GroupMessage.java       # Group message model
 │   └── Channel.java            # Group/channel model
-├── idgen/
-│   └── SnowflakeIdGenerator.java  # Unique ID generation
-├── storage/
+│
+├── service/                     # All Services (consolidated)
+│   ├── ChatServer.java         # WebSocket chat server
+│   ├── ApiServer.java          # REST API server
+│   ├── ServiceDiscovery.java   # Zookeeper simulation
+│   ├── PresenceService.java    # Online/offline tracking
+│   └── PushNotificationService.java  # Push notifications
+│
+├── storage/                     # Storage Layer
 │   ├── KVStore.java            # KV store interface
 │   ├── InMemoryKVStore.java    # In-memory implementation
 │   └── MessageStore.java       # Message storage layer
-├── queue/
-│   └── MessageSyncQueue.java   # Message delivery queue
-├── discovery/
-│   └── ServiceDiscovery.java   # Zookeeper simulation
-├── server/
-│   └── ChatServer.java         # WebSocket chat server
-├── presence/
-│   └── PresenceService.java    # Online/offline tracking
-├── notification/
-│   └── PushNotificationService.java  # Push notifications
-└── api/
-    └── ApiServer.java          # REST API server
+│
+├── queue/                       # Message Queues
+│   ├── MessageSyncQueue.java   # Message delivery queue
+│   └── KafkaStyleMessageQueue.java  # Kafka-style demo
+│
+└── idgen/                       # ID Generation
+    └── SnowflakeIdGenerator.java  # Unique ID generation
 ```
 
 ## 🚀 Running the Demo
