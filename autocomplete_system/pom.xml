@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.autocomplete</groupId>
+    <artifactId>autocomplete-system</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>Search Autocomplete System</name>
+    <description>
+        A hands-on implementation of a Search Autocomplete System
+        based on Alex Xu's System Design Interview book (Chapter 13).
+        
+        Key Features:
+        - Trie data structure with top-k caching at each node
+        - Prefix-based matching
+        - Frequency-based ranking
+        - Data collection pipeline (Analytics → Aggregators → Workers → Trie DB)
+        - Trie Cache for fast reads
+        - Sharding for scalability
+    </description>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <configuration>
+                    <mainClass>com.autocomplete.AutocompleteDemo</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+

@@ -12,6 +12,7 @@ This repository contains hands-on implementations of popular system design probl
 |---|--------|-------------|--------------|------------|
 | 1 | [Chat System](./chat_system/) | WhatsApp/Discord-like messaging | WebSocket, Kafka, Cassandra, Presence | [View](./chat_system/INTERVIEW_CHEATSHEET.md) |
 | 2 | [News Feed System](./news_feed_system/) | Facebook/Twitter-like feed | Fanout, Ranking, Caching, Graph DB | [View](./news_feed_system/INTERVIEW_CHEATSHEET.md) |
+| 3 | [Autocomplete System](./autocomplete_system/) | Google/Amazon search suggestions | Trie, Top-K Caching, Sharding | [View](./autocomplete_system/INTERVIEW_CHEATSHEET.md) |
 
 ---
 
@@ -92,6 +93,11 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── autocomplete_system/         ← Search Autocomplete System
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
 ├── (url_shortener)/             ← Coming soon
 └── ...
@@ -105,11 +111,11 @@ Hands on System Design/
 |--------|--------------|--------|
 | Chat System | WebSocket, Kafka, Cassandra, Presence, Fan-out | ✅ Complete |
 | News Feed System | Fanout on Write/Read, Ranking, Caching, Graph DB | ✅ Complete |
+| Search Autocomplete | Trie, Top-K Caching, Sharding, Data Pipeline | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
 | URL Shortener | Base62 encoding, Caching, Analytics, Redirection | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
 | Distributed Cache | Consistent hashing, Eviction, Replication | 📋 Planned |
-| Search Autocomplete | Trie, Ranking, Caching, Typeahead | 📋 Planned |
 | Web Crawler | URL frontier, Politeness, Deduplication | 📋 Planned |
 | Unique ID Generator | Snowflake, UUID, Database sequences | 📋 Planned |
 
