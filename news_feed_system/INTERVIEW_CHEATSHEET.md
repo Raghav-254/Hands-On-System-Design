@@ -18,7 +18,68 @@
 
 ---
 
-## 1. Feed Publishing Flow (Fanout on Write - Async/Event-Driven)
+## 1. Requirements Summary
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  FUNCTIONAL REQUIREMENTS                                                     ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  • Users can publish posts (text, images, videos)                           ║
+║  • Users can view personalized news feed from friends/followed accounts     ║
+║  • Feed is sorted by time (reverse chronological) or relevance              ║
+║  • Support for following/unfollowing users                                  ║
+║  • New posts appear in followers' feeds                                     ║
+║                                                                               ║
+║  OUT OF SCOPE (for this design):                                            ║
+║  • Likes, comments, shares (simple extensions)                              ║
+║  • Ads/sponsored content                                                    ║
+║  • Stories/ephemeral content                                                ║
+║  • Media upload service (assume URL provided)                               ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  NON-FUNCTIONAL REQUIREMENTS                                                 ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  • Latency: Feed retrieval < 200ms                                         ║
+║  • Latency: Post publishing < 500ms (user-facing)                          ║
+║  • Scale: 300M DAU                                                          ║
+║  • Availability: 99.99% uptime                                             ║
+║  • Eventual consistency OK (acceptable delay for new posts in feed)        ║
+║  • Read-heavy: Feed reads >> Post writes (10:1 ratio)                      ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  SCALE ESTIMATION                                                           ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  TRAFFIC:                                                                   ║
+║  • 300M DAU                                                                 ║
+║  • Each user views feed 5 times/day, publishes 0.5 posts/day               ║
+║                                                                               ║
+║  READ PATH (Feed Retrieval):                                                ║
+║  • 300M × 5 = 1.5B feed requests/day                                       ║
+║  • QPS: 1.5B / 86400 = ~17,000 QPS                                         ║
+║  • Peak: 2× average = ~35,000 QPS                                          ║
+║                                                                               ║
+║  WRITE PATH (Post Publishing):                                              ║
+║  • 300M × 0.5 = 150M posts/day                                             ║
+║  • Posts/sec: 150M / 86400 = ~1,700 posts/sec                              ║
+║  • Peak: 2× average = ~3,500 posts/sec                                     ║
+║                                                                               ║
+║  FANOUT (Most critical):                                                    ║
+║  • Average user has 200 followers                                          ║
+║  • 1,700 posts/sec × 200 followers = 340K feed updates/sec                 ║
+║  • Celebrity with 10M followers: 1 post = 10M cache updates!               ║
+║                                                                               ║
+║  STORAGE:                                                                   ║
+║  • Post: ~1KB (text + metadata)                                            ║
+║  • 150M posts/day × 1KB = 150GB/day                                        ║
+║  • 5 years: 150GB × 365 × 5 = ~275TB                                       ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## 2. Feed Publishing Flow (Fanout on Write - Async/Event-Driven)
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -79,7 +140,7 @@
 
 ---
 
-## 2. Feed Retrieval Flow
+## 3. Feed Retrieval Flow
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -115,7 +176,7 @@
 
 ---
 
-## 3. FANOUT ON WRITE vs FANOUT ON READ
+## 4. FANOUT ON WRITE vs FANOUT ON READ
 
 ### Fanout on Write (Push Model)
 
@@ -202,7 +263,7 @@
 
 ---
 
-## 4. News Feed Cache Deep-Dive (Important!)
+## 5. News Feed Cache Deep-Dive (Important!)
 
 ### Each User Has Their OWN Sorted Set!
 
@@ -292,7 +353,7 @@
 
 ---
 
-## 5. Database Deep-Dive
+## 6. Database Deep-Dive
 
 ### All Databases
 
@@ -377,7 +438,7 @@ ZREMRANGEBYRANK feed:123 0 -801
 
 ---
 
-## 5.5 DATABASE CHOICE TRADEOFFS (Non-Obvious Decisions)
+## 7. DATABASE CHOICE TRADEOFFS (Non-Obvious Decisions)
 
 ### Why MySQL for Posts (Not Cassandra)?
 
@@ -574,7 +635,7 @@ ZREMRANGEBYRANK feed:123 0 -801
 
 ---
 
-## 6. Architecture: Sync vs Async Fanout (Critical Interview Topic!)
+## 8. Architecture: Sync vs Async Fanout (Critical Interview Topic!)
 
 ### Approach 1: Synchronous (Simple but Coupled)
 
@@ -660,7 +721,7 @@ ZREMRANGEBYRANK feed:123 0 -801
 
 ---
 
-## 7. Message Queue Flow (Detailed)
+## 9. Message Queue Flow (Detailed)
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -701,7 +762,7 @@ ZREMRANGEBYRANK feed:123 0 -801
 
 ---
 
-## 8. Ranking and Scoring
+## 10. Ranking and Scoring
 
 ### Simple Chronological (Time-based)
 ```
@@ -727,7 +788,7 @@ Model: Predict probability of engagement
 
 ---
 
-## 9. Notification Service (Parallel Consumer)
+## 11. Notification Service (Parallel Consumer)
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -774,7 +835,7 @@ Model: Predict probability of engagement
 
 ---
 
-## 10. Interview Quick Answers
+## 12. Interview Quick Answers
 
 **Q: Who invokes the fanout service - PostService or the queue?**
 > "In production, PostService should NOT directly call FanoutService. Instead, PostService publishes a 'PostCreated' event to Kafka and returns immediately (< 100ms). FanoutService is a SEPARATE consumer that reads from Kafka asynchronously. This decouples the services, makes the API fast, and allows fanout to fail/retry independently. This is what Facebook and Twitter actually use."
@@ -814,7 +875,7 @@ Model: Predict probability of engagement
 
 ---
 
-## 11. Scalability Strategies
+## 13. Scalability Strategies
 
 | Strategy | How |
 |----------|-----|
@@ -826,7 +887,7 @@ Model: Predict probability of engagement
 
 ---
 
-## 12. Failure Scenarios
+## 14. Failure Scenarios
 
 | Scenario | Solution |
 |----------|----------|
@@ -838,7 +899,7 @@ Model: Predict probability of engagement
 
 ---
 
-## 13. Visual Architecture
+## 15. Visual Architecture
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────┐

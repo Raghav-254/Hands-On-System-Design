@@ -17,7 +17,64 @@
 
 ---
 
-## 1. Message Flow: Two Approaches
+## 1. Requirements Summary
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  FUNCTIONAL REQUIREMENTS                                                     ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  • 1-on-1 chat with low delivery latency                                    ║
+║  • Group chat (max 100 users per group)                                     ║
+║  • Online/Offline status (presence indicator)                               ║
+║  • Multiple device support (sync across devices)                            ║
+║  • Push notifications for offline users                                     ║
+║  • Message history / offline message sync                                   ║
+║                                                                               ║
+║  OUT OF SCOPE (for this design):                                            ║
+║  • End-to-end encryption                                                    ║
+║  • Read receipts / typing indicators (simple extension)                     ║
+║  • Media attachments (images, videos)                                       ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  NON-FUNCTIONAL REQUIREMENTS                                                 ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  • Latency: Real-time delivery (< 100ms for online users)                  ║
+║  • Scale: 50M DAU                                                           ║
+║  • Reliability: No message loss (at-least-once delivery)                   ║
+║  • Ordering: Messages arrive in sent order (per conversation)              ║
+║  • Highly available                                                         ║
+║  • Persistence: Messages stored forever                                     ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  SCALE ESTIMATION                                                           ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  USERS:                                                                     ║
+║  • 50M DAU                                                                  ║
+║  • Average 40 messages sent/received per user/day                          ║
+║  • Total: 50M × 40 = 2B messages/day                                       ║
+║  • Messages/sec: 2B / 86400 = ~23K messages/sec                            ║
+║  • Peak: 2-3× average = ~50-70K messages/sec                               ║
+║                                                                               ║
+║  CONNECTIONS:                                                               ║
+║  • 50M concurrent WebSocket connections at peak                            ║
+║  • If 1 server handles 10K connections → need 5,000 chat servers           ║
+║                                                                               ║
+║  STORAGE:                                                                   ║
+║  • Average message: 100 bytes                                              ║
+║  • 2B messages × 100 bytes = 200GB/day                                     ║
+║  • 5 years retention: 200GB × 365 × 5 = ~365TB                             ║
+║                                                                               ║
+║  BANDWIDTH:                                                                 ║
+║  • Inbound: 23K msg/sec × 100 bytes = ~2.3 MB/sec                         ║
+║  • Outbound: 23K msg/sec × 100 bytes × 2 (avg recipients) = ~4.6 MB/sec   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## 2. Message Flow: Two Approaches
 
 ### Approach 1: Dual Write (WhatsApp Style)
 ```
@@ -40,7 +97,7 @@ User A → Chat Server → Kafka ─┬─→ Consumer 1 → Cassandra
 
 ---
 
-## 2. Kafka Deep-Dive
+## 3. Kafka Deep-Dive
 
 ### Storage
 - **Stores on DISK** (not memory!)
@@ -78,7 +135,7 @@ ConsumerRecords records = consumer.poll(Duration.ofSeconds(1));
 
 ---
 
-## 3. Fan-Out Strategies
+## 4. Fan-Out Strategies
 
 ### Fan-Out on WRITE (Small Groups < 100)
 ```
@@ -100,7 +157,7 @@ Reads: N (all members read from channel)
 
 ---
 
-## 4. Offline User Flow
+## 5. Offline User Flow
 
 ### When User is Offline
 1. Message → Kafka
@@ -121,7 +178,7 @@ Step 2: PUSH via Kafka
 
 ---
 
-## 5. PRESENCE SERVER (Online/Offline Status)
+## 6. PRESENCE SERVER (Online/Offline Status)
 
 ### How Presence Works
 
@@ -222,7 +279,7 @@ SET user:server:user123 "chat-server-5"
 
 ---
 
-## 6. PUSH NOTIFICATION SERVER
+## 7. PUSH NOTIFICATION SERVER
 
 ### When Push Notifications are Triggered
 
@@ -325,7 +382,7 @@ CREATE TABLE device_tokens (
 
 ---
 
-## 7. MULTI-DEVICE SYNC (Two Devices Flow)
+## 8. MULTI-DEVICE SYNC (Two Devices Flow)
 
 ### Problem Statement
 
@@ -481,7 +538,7 @@ SADD user:servers:alice "chat-server-3" "chat-server-5"
 
 ---
 
-## 8. DATABASE DEEP-DIVE (Complete Summary)
+## 9. DATABASE DEEP-DIVE (Complete Summary)
 
 ### Overview: All Databases
 
@@ -745,7 +802,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 8.5 DATABASE CHOICE TRADEOFFS (Non-Obvious Decisions)
+## 10. DATABASE CHOICE TRADEOFFS (Non-Obvious Decisions)
 
 ### Why Cassandra for Messages (Not MySQL)?
 
@@ -884,7 +941,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 9. Snowflake ID
+## 11. Snowflake ID
 
 ```
 | 1 bit | 41 bits    | 5 bits  | 5 bits   | 12 bits  |
@@ -896,7 +953,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 10. Interview Quick Answers
+## 12. Interview Quick Answers
 
 **Q: Push or pull for delivery?**
 > "Both! Kafka uses long-polling (feels like push). poll() blocks until data or timeout. For offline sync, pull from Cassandra."
@@ -939,7 +996,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 11. Visual Summary
+## 13. Visual Summary
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────┐
@@ -1020,7 +1077,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 12. Scalability Strategies
+## 14. Scalability Strategies
 
 | Strategy | How |
 |----------|-----|
@@ -1032,7 +1089,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 13. Common Failure Scenarios
+## 15. Common Failure Scenarios
 
 | Scenario | Solution |
 |----------|----------|
