@@ -14,6 +14,7 @@ This repository contains hands-on implementations of popular system design probl
 | 2 | [News Feed System](./news_feed_system/) | Facebook/Twitter-like feed | Fanout, Ranking, Caching, Graph DB | [View](./news_feed_system/INTERVIEW_CHEATSHEET.md) |
 | 3 | [Autocomplete System](./autocomplete_system/) | Google/Amazon search suggestions | Trie, Top-K Caching, Sharding | [View](./autocomplete_system/INTERVIEW_CHEATSHEET.md) |
 | 4 | [Video Streaming System](./video_streaming_system/) | YouTube-like video platform | Pre-signed URL, DAG Pipeline, CDN, Adaptive Bitrate | [View](./video_streaming_system/INTERVIEW_CHEATSHEET.md) |
+| 5 | [Google Drive System](./google_drive_system/) | Dropbox/Google Drive file sync | Block Server, Delta Sync, Deduplication, Versioning | [View](./google_drive_system/INTERVIEW_CHEATSHEET.md) |
 
 ---
 
@@ -104,6 +105,11 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── google_drive_system/         ← Google Drive / Dropbox
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
 ├── (url_shortener)/             ← Coming soon
 └── ...
@@ -119,6 +125,7 @@ Hands on System Design/
 | News Feed System | Fanout on Write/Read, Ranking, Caching, Graph DB | ✅ Complete |
 | Search Autocomplete | Trie, Top-K Caching, Sharding, Data Pipeline | ✅ Complete |
 | Video Streaming | Pre-signed URL, DAG Pipeline, CDN, Adaptive Bitrate | ✅ Complete |
+| Google Drive | Block Server, Delta Sync, Deduplication, Versioning | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
 | URL Shortener | Base62 encoding, Caching, Analytics, Redirection | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
