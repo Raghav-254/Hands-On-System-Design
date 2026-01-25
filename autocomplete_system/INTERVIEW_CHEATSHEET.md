@@ -59,9 +59,11 @@ Based on Alex Xu's System Design Interview - Chapter 13
 
 ## 2. API Endpoints
 
+**All APIs handled by API Server (stateless, behind Load Balancer)**
+
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║  AUTOCOMPLETE API                                                            ║
+║  AUTOCOMPLETE API (API Server → Trie Cache/Trie DB)                         ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
 ║  GET /api/autocomplete                                                       ║
@@ -962,6 +964,12 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 │  │  Analytics → Aggregators → Workers → Trie Builder             │          │
 │  │  (Kafka)     (Spark)                                          │          │
 │  └────────────────────────────────────────────────────────────────┘          │
+│                                                                               │
+│  KEY FLOWS:                                                                  │
+│  ① Query: Client → API → Trie Cache (Redis) → top-k suggestions            │
+│  ② Cache Miss: Trie Cache → Trie DB (KV store) → return + cache            │
+│  ③ Analytics: Search submit → Kafka → Spark Aggregator → S3                │
+│  ④ Rebuild: S3 → Trie Workers → Trie DB → Cache refresh (weekly)           │
 │                                                                               │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```

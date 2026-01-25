@@ -1202,6 +1202,12 @@ CREATE TABLE friendships (
 │  │  • On status change: PUBLISH presence:updates "userB:online"          │   │
 │  └───────────────────────────────────────────────────────────────────────┘   │
 │                                                                               │
+│  KEY FLOWS:                                                                  │
+│  ① Send: Client → WebSocket → Chat Server → Kafka → Cassandra              │
+│  ② Deliver: Kafka → Delivery Consumer → Redis (presence) → Chat Server     │
+│  ③ Sync: Client reconnect → Chat Server → Cassandra (cursor-based)         │
+│  ④ Presence: Client heartbeat → Presence Server → Redis (TTL)              │
+│                                                                               │
 └───────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐

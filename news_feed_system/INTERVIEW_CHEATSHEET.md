@@ -81,9 +81,11 @@
 
 ## 2. API Endpoints
 
+**All APIs handled by API Server (stateless, behind Load Balancer)**
+
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║  FEED PUBLISHING APIs                                                        ║
+║  FEED PUBLISHING APIs (API Server → Post Service)                            ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
 ║  POST /v1/me/feed                                                            ║
@@ -1082,6 +1084,12 @@ Model: Predict probability of engagement
 │                                                                               │
 │  KEY: PostService does NOT call FanoutService directly!                      │
 │       They communicate via Kafka (decoupled, async, poll-based)              │
+│                                                                               │
+│  KEY FLOWS:                                                                  │
+│  ① Post: Client → API → PostService → PostDB → Kafka                        │
+│  ② Fanout: Kafka → FanoutService → GraphDB → Redis (per-user feed)          │
+│  ③ Read Feed: Client → API → NewsFeedService → Redis Cache                  │
+│  ④ Notification: Kafka → NotificationService → APNs/FCM                     │
 │                                                                               │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```

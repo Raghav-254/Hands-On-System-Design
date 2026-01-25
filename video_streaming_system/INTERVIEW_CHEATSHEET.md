@@ -67,9 +67,11 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ## 2. API Endpoints
 
+**All APIs handled by API Server (stateless, behind Load Balancer)**
+
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║  VIDEO UPLOAD APIs                                                           ║
+║  VIDEO UPLOAD APIs (API Server)                                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
 ║  POST /api/upload/init                                                       ║
