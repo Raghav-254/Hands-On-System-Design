@@ -1087,6 +1087,9 @@ Based on Alex Xu's System Design Interview - Chapter 14
 **Q: How do you reduce CDN costs?**
 > "Only cache popular videos on CDN. Use multi-CDN strategy for price negotiation. Compress videos (H.265 is 50% smaller than H.264). Adaptive bitrate prevents over-serving quality. Consider geographic placement of origin servers."
 
+**Q: Why not use a Block Server (like Dropbox) for video uploads?**
+> "Block servers are great when files are shared/duplicated across users (Dropbox, Google Drive) because they enable deduplication - same file uploaded once, shared by many. For video streaming, every video is unique, so there's zero dedup benefit. Worse, block servers double your bandwidth cost (client → block server → S3 vs client → S3 directly). At YouTube's scale (150TB/day uploads), this would be astronomically expensive. Additionally, S3 already provides multipart upload with resume/retry built-in, so there's no need to build a custom block server."
+
 ---
 
 ## 11. Scalability Strategies
