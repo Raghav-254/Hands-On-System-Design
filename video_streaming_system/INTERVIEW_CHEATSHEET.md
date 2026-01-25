@@ -65,7 +65,118 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 2. High-Level Architecture
+## 2. API Endpoints
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  VIDEO UPLOAD APIs                                                           ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  POST /api/upload/init                                                       ║
+║  ──────────────────────                                                       ║
+║  Description: Initialize upload, get pre-signed URL                         ║
+║  Auth: Bearer token (required)                                               ║
+║                                                                               ║
+║  Request Body:                                                               ║
+║  {                                                                           ║
+║    "title": "My Awesome Video",                                              ║
+║    "description": "Video description",                                       ║
+║    "file_size": 1073741824,          // bytes                               ║
+║    "content_type": "video/mp4"                                               ║
+║  }                                                                           ║
+║                                                                               ║
+║  Response: 200 OK                                                            ║
+║  {                                                                           ║
+║    "video_id": "vid_abc123",                                                 ║
+║    "presigned_url": "https://s3.../vid_abc123?signature=...",               ║
+║    "expires_at": "2024-01-15T11:30:00Z"                                     ║
+║  }                                                                           ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  POST /api/upload/resume                                                     ║
+║  ────────────────────────                                                    ║
+║  Description: Resume failed GOP upload                                      ║
+║  Request Body: { "video_id": "...", "gop_index": 3 }                        ║
+║  Response: { "presigned_url": "..." }                                       ║
+║                                                                               ║
+║  GET /api/videos/{video_id}/status                                           ║
+║  ──────────────────────────────────                                          ║
+║  Description: Check upload/transcoding status                               ║
+║  Response: { "status": "PROCESSING", "progress": 45 }                       ║
+║  Status: UPLOADING | PROCESSING | READY | FAILED                            ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  VIDEO STREAMING APIs                                                        ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  GET /api/videos/{video_id}                                                  ║
+║  ───────────────────────────                                                 ║
+║  Description: Get video metadata                                            ║
+║  Auth: Optional (affects visibility for private videos)                     ║
+║                                                                               ║
+║  Response: 200 OK                                                            ║
+║  {                                                                           ║
+║    "video_id": "vid_abc123",                                                 ║
+║    "title": "My Awesome Video",                                              ║
+║    "description": "...",                                                     ║
+║    "author": { "user_id": "123", "name": "Alice" },                         ║
+║    "duration": 125,                  // seconds                              ║
+║    "thumbnail_url": "https://cdn.../thumb.jpg",                             ║
+║    "manifest_url": "https://cdn.../vid_abc123/master.m3u8",                 ║
+║    "view_count": 10234,                                                      ║
+║    "created_at": "2024-01-15T10:30:00Z"                                     ║
+║  }                                                                           ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  GET /api/videos/{video_id}/stream                                           ║
+║  ──────────────────────────────────                                          ║
+║  Description: Get streaming URL (redirects to CDN)                          ║
+║  Query Params: quality (optional: 360p, 720p, 1080p, auto)                  ║
+║                                                                               ║
+║  Response: 302 Redirect to CDN                                              ║
+║  Location: https://cdn.example.com/vid_abc123/720p.m3u8                     ║
+║                                                                               ║
+║  OR Response: 200 OK                                                         ║
+║  {                                                                           ║
+║    "manifest_url": "https://cdn.../master.m3u8",                            ║
+║    "renditions": [                                                           ║
+║      { "resolution": "360p", "url": "https://cdn.../360p.m3u8" },          ║
+║      { "resolution": "720p", "url": "https://cdn.../720p.m3u8" },          ║
+║      { "resolution": "1080p", "url": "https://cdn.../1080p.m3u8" }         ║
+║    ]                                                                         ║
+║  }                                                                           ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  VIDEO MANAGEMENT APIs                                                       ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  PUT /api/videos/{video_id}                                                  ║
+║  ───────────────────────────                                                 ║
+║  Description: Update video metadata (title, description, visibility)       ║
+║  Auth: Bearer token (must be owner)                                         ║
+║  Request Body: { "title": "...", "description": "...", "visibility": "..." }║
+║  Response: 200 OK { "video_id": "...", "updated_at": "..." }                ║
+║                                                                               ║
+║  DELETE /api/videos/{video_id}                                               ║
+║  ─────────────────────────────                                               ║
+║  Description: Delete video                                                  ║
+║  Auth: Bearer token (must be owner)                                         ║
+║  Response: 204 No Content                                                    ║
+║                                                                               ║
+║  GET /api/users/{user_id}/videos                                             ║
+║  ────────────────────────────────                                            ║
+║  Description: List videos uploaded by user (channel page)                   ║
+║  Query Params: page_size, cursor                                            ║
+║  Response: { "videos": [...], "next_cursor": "..." }                        ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## 3. High-Level Architecture
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -128,7 +239,7 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 3. Video Upload Flow (Figure 14-5, 14-27)
+## 4. Video Upload Flow (Figure 14-5, 14-27)
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -494,7 +605,7 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 4. Transcoding Pipeline (Figures 14-8, 14-10)
+## 5. Transcoding Pipeline (Figures 14-8, 14-10)
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -681,7 +792,7 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 5. Video Streaming (Figure 14-7, 14-28)
+## 6. Video Streaming (Figure 14-7, 14-28)
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -797,7 +908,7 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 6. Database Deep-Dive
+## 7. Database Deep-Dive
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -859,7 +970,7 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 7. Cost Optimization Strategies
+## 8. Cost Optimization Strategies
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -894,7 +1005,7 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 8. Database Choice Tradeoffs
+## 9. Database Choice Tradeoffs
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -935,7 +1046,7 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 9. Interview Quick Answers
+## 10. Interview Quick Answers
 
 **Q: Why use pre-signed URLs for upload?**
 > "Video files are large (up to 1GB). Uploading through API servers would overload them. Pre-signed URLs let clients upload directly to S3, bypassing API servers. The URL is temporary (1 hour) and includes authentication signature."
@@ -978,7 +1089,7 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 10. Scalability Strategies
+## 11. Scalability Strategies
 
 | Component | Scaling Approach |
 |-----------|-----------------|
@@ -991,7 +1102,7 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 11. Failure Scenarios
+## 12. Failure Scenarios
 
 | Scenario | Impact | Mitigation |
 |----------|--------|------------|
@@ -1003,7 +1114,7 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
-## 12. Visual Architecture Summary
+## 13. Visual Architecture Summary
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗

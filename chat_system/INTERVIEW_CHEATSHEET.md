@@ -74,7 +74,153 @@
 
 ---
 
-## 2. Message Flow: Two Approaches
+## 2. API Endpoints
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  REST APIs (via API Gateway/Load Balancer)                                   ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  POST /api/auth/login                                                        ║
+║  ─────────────────────                                                        ║
+║  Description: Authenticate user, get token + chat server assignment         ║
+║  Request: { "username": "alice", "password": "..." }                        ║
+║  Response: {                                                                 ║
+║    "token": "jwt_...",                                                       ║
+║    "chat_server": "wss://chat-server-42.example.com",                       ║
+║    "user_id": "user_123"                                                     ║
+║  }                                                                           ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  GET /api/conversations                                                      ║
+║  ───────────────────────                                                     ║
+║  Description: Get list of user's conversations                             ║
+║  Auth: Bearer token                                                          ║
+║  Response: {                                                                 ║
+║    "conversations": [                                                        ║
+║      {                                                                       ║
+║        "conversation_id": "conv_123",                                       ║
+║        "type": "1:1",                                                        ║
+║        "participants": [{ "user_id": "456", "name": "Bob" }],              ║
+║        "last_message": { "content": "Hey!", "timestamp": "..." },          ║
+║        "unread_count": 3                                                    ║
+║      }                                                                       ║
+║    ]                                                                         ║
+║  }                                                                           ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  GET /api/conversations/{conv_id}/messages                                   ║
+║  ──────────────────────────────────────────                                  ║
+║  Description: Get message history (for sync/scroll back)                    ║
+║  Query Params:                                                               ║
+║  • cursor: message_id (for pagination)                                      ║
+║  • limit: int (default 50)                                                  ║
+║  • direction: "before" | "after"                                            ║
+║                                                                               ║
+║  Response: {                                                                 ║
+║    "messages": [                                                             ║
+║      {                                                                       ║
+║        "message_id": "msg_789",                                             ║
+║        "sender_id": "456",                                                  ║
+║        "content": "Hello!",                                                  ║
+║        "timestamp": "2024-01-15T10:30:00Z"                                 ║
+║      }                                                                       ║
+║    ],                                                                        ║
+║    "has_more": true,                                                         ║
+║    "next_cursor": "msg_750"                                                 ║
+║  }                                                                           ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  POST /api/groups                                                            ║
+║  ─────────────────                                                           ║
+║  Description: Create a new group chat                                       ║
+║  Request: { "name": "Project Team", "member_ids": ["123", "456", "789"] }  ║
+║  Response: { "group_id": "group_abc", "created_at": "..." }                 ║
+║                                                                               ║
+║  POST /api/groups/{group_id}/members                                         ║
+║  ─────────────────────────────────────                                       ║
+║  Description: Add member to group                                           ║
+║  Request: { "user_id": "999" }                                              ║
+║  Response: 200 OK                                                            ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  WEBSOCKET APIs (via Chat Server - persistent connection)                   ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  CONNECTION: wss://chat-server-42.example.com?token=jwt_...                 ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  CLIENT → SERVER MESSAGES:                                                  ║
+║  ──────────────────────────                                                  ║
+║                                                                               ║
+║  SEND MESSAGE:                                                              ║
+║  {                                                                           ║
+║    "type": "send_message",                                                  ║
+║    "conversation_id": "conv_123",                                           ║
+║    "content": "Hello!",                                                     ║
+║    "client_msg_id": "local_uuid"    // for deduplication                   ║
+║  }                                                                           ║
+║                                                                               ║
+║  MARK AS READ:                                                              ║
+║  {                                                                           ║
+║    "type": "mark_read",                                                     ║
+║    "conversation_id": "conv_123",                                           ║
+║    "up_to_message_id": "msg_789"                                            ║
+║  }                                                                           ║
+║                                                                               ║
+║  TYPING INDICATOR:                                                          ║
+║  {                                                                           ║
+║    "type": "typing",                                                        ║
+║    "conversation_id": "conv_123",                                           ║
+║    "is_typing": true                                                        ║
+║  }                                                                           ║
+║                                                                               ║
+║  HEARTBEAT (every 5s):                                                      ║
+║  { "type": "ping" }                                                         ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  SERVER → CLIENT MESSAGES:                                                  ║
+║  ──────────────────────────                                                  ║
+║                                                                               ║
+║  NEW MESSAGE:                                                               ║
+║  {                                                                           ║
+║    "type": "new_message",                                                   ║
+║    "message_id": "msg_790",                                                 ║
+║    "conversation_id": "conv_123",                                           ║
+║    "sender_id": "456",                                                      ║
+║    "content": "Hey there!",                                                 ║
+║    "timestamp": "2024-01-15T10:31:00Z"                                     ║
+║  }                                                                           ║
+║                                                                               ║
+║  DELIVERY ACK:                                                              ║
+║  {                                                                           ║
+║    "type": "ack",                                                           ║
+║    "client_msg_id": "local_uuid",                                           ║
+║    "message_id": "msg_791",         // server-assigned ID                  ║
+║    "status": "delivered"                                                    ║
+║  }                                                                           ║
+║                                                                               ║
+║  PRESENCE UPDATE:                                                           ║
+║  {                                                                           ║
+║    "type": "presence",                                                      ║
+║    "user_id": "789",                                                        ║
+║    "status": "online" | "offline"                                          ║
+║  }                                                                           ║
+║                                                                               ║
+║  PONG:                                                                      ║
+║  { "type": "pong" }                                                         ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## 3. Message Flow: Two Approaches
 
 ### Approach 1: Dual Write (WhatsApp Style)
 ```
@@ -97,7 +243,7 @@ User A → Chat Server → Kafka ─┬─→ Consumer 1 → Cassandra
 
 ---
 
-## 3. Kafka Deep-Dive
+## 4. Kafka Deep-Dive
 
 ### Storage
 - **Stores on DISK** (not memory!)
@@ -135,7 +281,7 @@ ConsumerRecords records = consumer.poll(Duration.ofSeconds(1));
 
 ---
 
-## 4. Fan-Out Strategies
+## 5. Fan-Out Strategies
 
 ### Fan-Out on WRITE (Small Groups < 100)
 ```
@@ -157,7 +303,7 @@ Reads: N (all members read from channel)
 
 ---
 
-## 5. Offline User Flow
+## 6. Offline User Flow
 
 ### When User is Offline
 1. Message → Kafka
@@ -178,7 +324,7 @@ Step 2: PUSH via Kafka
 
 ---
 
-## 6. PRESENCE SERVER (Online/Offline Status)
+## 7. PRESENCE SERVER (Online/Offline Status)
 
 ### How Presence Works
 
@@ -279,7 +425,7 @@ SET user:server:user123 "chat-server-5"
 
 ---
 
-## 7. PUSH NOTIFICATION SERVER
+## 8. PUSH NOTIFICATION SERVER
 
 ### When Push Notifications are Triggered
 
@@ -382,7 +528,7 @@ CREATE TABLE device_tokens (
 
 ---
 
-## 8. MULTI-DEVICE SYNC (Two Devices Flow)
+## 9. MULTI-DEVICE SYNC (Two Devices Flow)
 
 ### Problem Statement
 
@@ -538,7 +684,7 @@ SADD user:servers:alice "chat-server-3" "chat-server-5"
 
 ---
 
-## 9. DATABASE DEEP-DIVE (Complete Summary)
+## 10. DATABASE DEEP-DIVE (Complete Summary)
 
 ### Overview: All Databases
 
@@ -802,7 +948,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 10. DATABASE CHOICE TRADEOFFS (Non-Obvious Decisions)
+## 11. DATABASE CHOICE TRADEOFFS (Non-Obvious Decisions)
 
 ### Why Cassandra for Messages (Not MySQL)?
 
@@ -941,7 +1087,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 11. Snowflake ID
+## 12. Snowflake ID
 
 ```
 | 1 bit | 41 bits    | 5 bits  | 5 bits   | 12 bits  |
@@ -953,7 +1099,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 12. Interview Quick Answers
+## 13. Interview Quick Answers
 
 **Q: Push or pull for delivery?**
 > "Both! Kafka uses long-polling (feels like push). poll() blocks until data or timeout. For offline sync, pull from Cassandra."
@@ -996,7 +1142,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 13. Visual Summary
+## 14. Visual Summary
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────┐
@@ -1077,7 +1223,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 14. Scalability Strategies
+## 15. Scalability Strategies
 
 | Strategy | How |
 |----------|-----|
@@ -1089,7 +1235,7 @@ CREATE TABLE friendships (
 
 ---
 
-## 15. Common Failure Scenarios
+## 16. Common Failure Scenarios
 
 | Scenario | Solution |
 |----------|----------|

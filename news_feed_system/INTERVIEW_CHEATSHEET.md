@@ -79,7 +79,109 @@
 
 ---
 
-## 2. Feed Publishing Flow (Fanout on Write - Async/Event-Driven)
+## 2. API Endpoints
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  FEED PUBLISHING APIs                                                        ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  POST /v1/me/feed                                                            ║
+║  ─────────────────                                                            ║
+║  Description: Create a new post                                              ║
+║  Auth: Bearer token (required)                                               ║
+║                                                                               ║
+║  Request Body:                                                               ║
+║  {                                                                           ║
+║    "content": "Hello world!",                                                ║
+║    "media_ids": ["img_123", "vid_456"],  // optional                        ║
+║    "visibility": "public"                 // public | friends | private     ║
+║  }                                                                           ║
+║                                                                               ║
+║  Response: 201 Created                                                       ║
+║  {                                                                           ║
+║    "post_id": "post_abc123",                                                 ║
+║    "created_at": "2024-01-15T10:30:00Z"                                     ║
+║  }                                                                           ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  DELETE /v1/posts/{post_id}                                                  ║
+║  ──────────────────────────                                                  ║
+║  Description: Delete a post                                                  ║
+║  Auth: Bearer token (must be post owner)                                    ║
+║  Response: 204 No Content                                                    ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  FEED RETRIEVAL APIs                                                         ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  GET /v1/me/feed                                                             ║
+║  ────────────────                                                            ║
+║  Description: Get current user's personalized news feed                     ║
+║  Auth: Bearer token (required)                                               ║
+║                                                                               ║
+║  Query Parameters:                                                           ║
+║  • page_size: int (default 20, max 100)                                     ║
+║  • cursor: string (opaque cursor for pagination)                            ║
+║                                                                               ║
+║  Response: 200 OK                                                            ║
+║  {                                                                           ║
+║    "posts": [                                                                ║
+║      {                                                                       ║
+║        "post_id": "post_abc123",                                            ║
+║        "author": { "user_id": "123", "name": "Alice", "avatar": "..." },   ║
+║        "content": "Hello world!",                                           ║
+║        "media": [...],                                                      ║
+║        "created_at": "2024-01-15T10:30:00Z",                               ║
+║        "likes_count": 42,                                                   ║
+║        "comments_count": 5                                                  ║
+║      },                                                                      ║
+║      ...                                                                     ║
+║    ],                                                                        ║
+║    "next_cursor": "eyJsYXN0X3Bvc3RfaWQiOiAiMTIzIn0="                        ║
+║  }                                                                           ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  GET /v1/users/{user_id}/posts                                               ║
+║  ─────────────────────────────                                               ║
+║  Description: Get a user's profile posts (their own posts)                  ║
+║  Auth: Bearer token (optional, affects visibility)                          ║
+║  Query Parameters: page_size, cursor                                        ║
+║  Response: Same structure as /me/feed                                       ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  SOCIAL GRAPH APIs                                                           ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  POST /v1/users/{user_id}/follow                                             ║
+║  ────────────────────────────────                                            ║
+║  Description: Follow a user                                                  ║
+║  Response: 200 OK { "following": true }                                     ║
+║                                                                               ║
+║  DELETE /v1/users/{user_id}/follow                                           ║
+║  ─────────────────────────────────                                           ║
+║  Description: Unfollow a user                                               ║
+║  Response: 200 OK { "following": false }                                    ║
+║                                                                               ║
+║  GET /v1/users/{user_id}/followers                                           ║
+║  ─────────────────────────────────                                           ║
+║  Description: Get user's followers                                          ║
+║  Query Parameters: page_size, cursor                                        ║
+║  Response: { "users": [...], "next_cursor": "..." }                        ║
+║                                                                               ║
+║  GET /v1/users/{user_id}/following                                           ║
+║  ─────────────────────────────────                                           ║
+║  Description: Get users this person follows                                 ║
+║  Response: Same structure as /followers                                     ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## 3. Feed Publishing Flow (Fanout on Write - Async/Event-Driven)
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -140,7 +242,7 @@
 
 ---
 
-## 3. Feed Retrieval Flow
+## 4. Feed Retrieval Flow
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -176,7 +278,7 @@
 
 ---
 
-## 4. FANOUT ON WRITE vs FANOUT ON READ
+## 5. FANOUT ON WRITE vs FANOUT ON READ
 
 ### Fanout on Write (Push Model)
 
@@ -263,7 +365,7 @@
 
 ---
 
-## 5. News Feed Cache Deep-Dive (Important!)
+## 6. News Feed Cache Deep-Dive (Important!)
 
 ### Each User Has Their OWN Sorted Set!
 
@@ -353,7 +455,7 @@
 
 ---
 
-## 6. Database Deep-Dive
+## 7. Database Deep-Dive
 
 ### All Databases
 
@@ -438,7 +540,7 @@ ZREMRANGEBYRANK feed:123 0 -801
 
 ---
 
-## 7. DATABASE CHOICE TRADEOFFS (Non-Obvious Decisions)
+## 8. DATABASE CHOICE TRADEOFFS (Non-Obvious Decisions)
 
 ### Why MySQL for Posts (Not Cassandra)?
 
@@ -635,7 +737,7 @@ ZREMRANGEBYRANK feed:123 0 -801
 
 ---
 
-## 8. Architecture: Sync vs Async Fanout (Critical Interview Topic!)
+## 9. Architecture: Sync vs Async Fanout (Critical Interview Topic!)
 
 ### Approach 1: Synchronous (Simple but Coupled)
 
@@ -721,7 +823,7 @@ ZREMRANGEBYRANK feed:123 0 -801
 
 ---
 
-## 9. Message Queue Flow (Detailed)
+## 10. Message Queue Flow (Detailed)
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -762,7 +864,7 @@ ZREMRANGEBYRANK feed:123 0 -801
 
 ---
 
-## 10. Ranking and Scoring
+## 11. Ranking and Scoring
 
 ### Simple Chronological (Time-based)
 ```
@@ -788,7 +890,7 @@ Model: Predict probability of engagement
 
 ---
 
-## 11. Notification Service (Parallel Consumer)
+## 12. Notification Service (Parallel Consumer)
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -835,7 +937,7 @@ Model: Predict probability of engagement
 
 ---
 
-## 12. Interview Quick Answers
+## 13. Interview Quick Answers
 
 **Q: Who invokes the fanout service - PostService or the queue?**
 > "In production, PostService should NOT directly call FanoutService. Instead, PostService publishes a 'PostCreated' event to Kafka and returns immediately (< 100ms). FanoutService is a SEPARATE consumer that reads from Kafka asynchronously. This decouples the services, makes the API fast, and allows fanout to fail/retry independently. This is what Facebook and Twitter actually use."
@@ -875,7 +977,7 @@ Model: Predict probability of engagement
 
 ---
 
-## 13. Scalability Strategies
+## 14. Scalability Strategies
 
 | Strategy | How |
 |----------|-----|
@@ -887,7 +989,7 @@ Model: Predict probability of engagement
 
 ---
 
-## 14. Failure Scenarios
+## 15. Failure Scenarios
 
 | Scenario | Solution |
 |----------|----------|
@@ -899,7 +1001,7 @@ Model: Predict probability of engagement
 
 ---
 
-## 15. Visual Architecture
+## 16. Visual Architecture
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────┐

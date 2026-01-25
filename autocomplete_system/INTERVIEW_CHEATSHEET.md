@@ -57,7 +57,79 @@ Based on Alex Xu's System Design Interview - Chapter 13
 
 ---
 
-## 2. Trie Data Structure (Core Algorithm)
+## 2. API Endpoints
+
+```
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  AUTOCOMPLETE API                                                            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  GET /api/autocomplete                                                       ║
+║  ──────────────────────                                                       ║
+║  Description: Get top-k autocomplete suggestions for a prefix               ║
+║  Auth: Optional (can be used for personalization)                           ║
+║                                                                               ║
+║  Query Parameters:                                                           ║
+║  • q: string (required) - the prefix to search for                          ║
+║  • limit: int (optional, default 5, max 10) - number of suggestions         ║
+║                                                                               ║
+║  Example Request:                                                            ║
+║  GET /api/autocomplete?q=bes&limit=5                                        ║
+║                                                                               ║
+║  Response: 200 OK                                                            ║
+║  {                                                                           ║
+║    "suggestions": [                                                          ║
+║      { "text": "best buy", "score": 35 },                                   ║
+║      { "text": "best restaurants near me", "score": 28 },                   ║
+║      { "text": "best movies 2024", "score": 22 },                           ║
+║      { "text": "best laptops", "score": 18 },                               ║
+║      { "text": "best pizza", "score": 15 }                                  ║
+║    ],                                                                        ║
+║    "query_time_ms": 12                                                      ║
+║  }                                                                           ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  PERFORMANCE REQUIREMENTS:                                                  ║
+║  • Response time: < 100ms (or causes UI stuttering)                        ║
+║  • Called on EVERY keystroke (debounced ~50ms on client)                   ║
+║  • High cache hit rate expected (popular prefixes)                         ║
+║                                                                               ║
+║  ═══════════════════════════════════════════════════════════════════════════ ║
+║                                                                               ║
+║  ERROR RESPONSES:                                                            ║
+║  ─────────────────                                                           ║
+║  400 Bad Request: { "error": "Query too short" }  (if q < 1 char)          ║
+║  429 Too Many Requests: { "error": "Rate limit exceeded" }                 ║
+║  503 Service Unavailable: { "error": "Trie not ready" }                    ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  ANALYTICS/LOGGING API (Internal)                                           ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  POST /api/search/log                                                        ║
+║  ─────────────────────                                                        ║
+║  Description: Log when user selects a suggestion or submits search         ║
+║  Note: Called by frontend, NOT on every keystroke!                          ║
+║                                                                               ║
+║  Request Body:                                                               ║
+║  {                                                                           ║
+║    "query": "best buy",              // final selected/submitted query     ║
+║    "source": "autocomplete",         // autocomplete | typed | trending    ║
+║    "position": 1,                    // which suggestion was clicked (1-5) ║
+║    "session_id": "sess_abc123"                                              ║
+║  }                                                                           ║
+║                                                                               ║
+║  Response: 202 Accepted              // async processing                    ║
+║                                                                               ║
+║  Note: This data flows to Kafka → Aggregator → Trie rebuild                ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## 3. Trie Data Structure (Core Algorithm)
 
 ### Basic Trie Structure
 
@@ -133,7 +205,7 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 
 ---
 
-## 3. System Architecture
+## 4. System Architecture
 
 ### High-Level Design (Figure 13-11)
 
@@ -200,7 +272,7 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 
 ---
 
-## 4. Data Collection & Aggregation
+## 5. Data Collection & Aggregation
 
 ### Analytics Log
 
@@ -371,7 +443,7 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 
 ---
 
-## 5. Trie Storage & Memory Management
+## 6. Trie Storage & Memory Management
 
 ### Where is the Trie Stored? (Clarification)
 
@@ -636,7 +708,7 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 
 ---
 
-## 6. Sharding Strategy (Figure 13-15)
+## 7. Sharding Strategy (Figure 13-15)
 
 ### Simple vs Smart Sharding
 
@@ -700,7 +772,7 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 
 ---
 
-## 7. Trie Update Strategy (Figure 13-13)
+## 8. Trie Update Strategy (Figure 13-13)
 
 ```
 ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -744,7 +816,7 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 
 ---
 
-## 8. Database Choice Tradeoffs
+## 9. Database Choice Tradeoffs
 
 ### Why Redis/In-Memory for Trie Cache?
 
@@ -795,7 +867,7 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 
 ---
 
-## 9. Interview Quick Answers
+## 10. Interview Quick Answers
 
 **Q: Do you log every keystroke for analytics?**
 > "No! We only log when the user SELECTS a suggestion or SUBMITS the search. Logging keystrokes would create 20x more data and count incomplete/abandoned queries. We want to track what users actually wanted, not every character they typed. This gives a cleaner signal for ranking."
@@ -841,7 +913,7 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 
 ---
 
-## 10. Visual Architecture Summary
+## 11. Visual Architecture Summary
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────┐
@@ -896,7 +968,7 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 
 ---
 
-## 11. Scalability Strategies
+## 12. Scalability Strategies
 
 | Dimension | Strategy | Notes |
 |-----------|----------|-------|
@@ -908,7 +980,7 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 
 ---
 
-## 12. Common Failure Scenarios
+## 13. Common Failure Scenarios
 
 | Failure | Impact | Mitigation |
 |---------|--------|------------|
