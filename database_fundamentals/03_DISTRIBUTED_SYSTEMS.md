@@ -24,8 +24,8 @@
 │  │  Level 2 (Logic)           Level 3 (This)                               ││
 │  │  ───────────────           ──────────────                               ││
 │  │  MVCC (local)         ───► Distributed MVCC (global timestamps)         ││
-│  │  Isolation levels     ───► Distributed transactions are HARDER          ││
-│  │  Indexes              ───► Global vs Local secondary indexes            ││
+│  │  Isolation levels     ───► Distributed transactions (2PC, Saga)         ││
+│  │  Write conflicts      ───► LWW, Vector Clocks, CRDTs                    ││
 │  └─────────────────────────────────────────────────────────────────────────┘│
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────────┐│
@@ -48,17 +48,86 @@
 │  ✅ SQL: PostgreSQL replication, Vitess, CockroachDB, Spanner              │
 │  ✅ NoSQL: Cassandra, DynamoDB, MongoDB (designed for distributed)         │
 │                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  ⚠️  SQL vs NoSQL: WHICH TOPICS APPLY WHERE?                                │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  Not all distributed concepts apply equally to SQL and NoSQL!              │
+│                                                                              │
+│  ┌───────────────────────┬────────────┬────────────┬──────────────────────┐│
+│  │ Topic                 │ SQL        │ NewSQL     │ NoSQL (Leaderless)   ││
+│  │                       │(PostgreSQL)│(Cockroach) │(Cassandra, Dynamo)   ││
+│  ├───────────────────────┼────────────┼────────────┼──────────────────────┤│
+│  │ Replication           │ ✅ Yes     │ ✅ Yes     │ ✅ Yes               ││
+│  │ Sharding              │ ⚠️ Add-on  │ ✅ Native  │ ✅ Native            ││
+│  │ CAP/PACELC            │ ✅ Applies │ ✅ Applies │ ✅ Applies           ││
+│  │ Consensus (Raft)      │ ✅ For HA  │ ✅ Core    │ ❌ No leader         ││
+│  │ Conflict Resolution   │ ❌ N/A     │ ✅ Internal│ ✅ Primary use       ││
+│  │ Hinted Handoff        │ ❌ N/A     │ ❌ Uses Raft│ ✅ Primary use       ││
+│  │ Read Repair           │ ❌ N/A     │ ⚠️ Some    │ ✅ Primary use       ││
+│  │ Anti-Entropy          │ ❌ N/A     │ ⚠️ Some    │ ✅ Primary use       ││
+│  └───────────────────────┴────────────┴────────────┴──────────────────────┘│
+│                                                                              │
+│  WHY THE DIFFERENCE?                                                        │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  • SQL (single-leader): ONE node accepts writes → no write conflicts!     │
+│    Uses consensus only for FAILOVER (elect new leader when primary dies). │
+│                                                                              │
+│  • NewSQL: Uses consensus for EVERY WRITE to ensure strong consistency.   │
+│    Handles conflicts internally, you don't see them.                      │
+│                                                                              │
+│  • NoSQL (leaderless): ANY node can accept writes → conflicts happen!     │
+│    Needs LWW/Vector Clocks/CRDTs + repair mechanisms for consistency.     │
+│                                                                              │
+│  👉 Sections 1-4 apply broadly. Section 5 is primarily for leaderless.    │
+│                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Table of Contents
+
 1. [Replication Strategies](#1-replication-strategies)
+   - [Why Replicate?](#why-replicate)
+   - [Synchronous vs Asynchronous Replication](#synchronous-vs-asynchronous-replication)
+   - [Replication Topologies](#replication-topologies)
+   - [Handling Replication Lag](#handling-replication-lag)
+
 2. [Sharding (Horizontal Partitioning)](#2-sharding-horizontal-partitioning)
+   - [Sharding Strategies](#sharding-strategies) (Range, Hash, Consistent Hashing)
+   - [Choosing a Shard Key](#choosing-a-shard-key)
+   - [The Hotspot Problem](#the-hotspot-problem)
+   - [Cross-Shard Operations](#cross-shard-operations)
+   - [SQL Sharding: Add-On vs Native](#sql-sharding-add-on-vs-native)
+
 3. [CAP Theorem and PACELC](#3-cap-theorem-and-pacelc)
+   - [CAP Theorem](#cap-theorem)
+   - [CP vs AP During Partition](#during-a-partition-cp-vs-ap)
+   - [PACELC: The Complete Picture](#pacelc-the-complete-picture)
+   - [Database Classifications](#database-cappacelc-classifications)
+
 4. [Consensus and Coordination](#4-consensus-and-coordination)
+   - [Why Consensus Matters](#why-consensus-matters)
+   - [Raft Consensus](#raft-consensus-simplified)
+   - [Consensus Use Cases](#consensus-use-cases)
+   - [Distributed Locks vs Database Locks](#distributed-locks-vs-database-locks)
+   - [Fencing Tokens](#fencing-tokens-preventing-zombie-leaders)
+
 5. [Conflict Resolution & Anti-Entropy](#5-conflict-resolution--anti-entropy)
+   - **Part 1: Write Conflicts**
+     - [The Conflict Problem](#the-conflict-problem)
+     - [Last-Write-Wins (LWW)](#1-last-write-wins-lww)
+     - [Vector Clocks](#2-vector-clocks-detect-conflicts-dont-auto-resolve)
+     - [CRDTs](#3-crdts-conflict-free-replicated-data-types)
+   - **Part 2: Keeping Replicas in Sync**
+     - [Layer 1: Hinted Handoff](#layer-1-hinted-handoff-preventing-divergence)
+     - [Layer 2: Read Repair](#layer-2-read-repair-fixing-divergence-on-demand)
+     - [Layer 3: Anti-Entropy with Merkle Trees](#layer-3-anti-entropy-with-merkle-trees-background-repair)
+   - [Section 5 Summary](#section-5-summary)
+
 6. [Interview Checklist](#6-interview-checklist)
 
 ---
@@ -335,10 +404,11 @@ SHARDING SOLUTION:
 │  │  3,6,9,12... │ │  1,4,7,10... │ │  2,5,8,11... │                │
 │  └──────────────┘ └──────────────┘ └──────────────┘                │
 │                                                                      │
-│  ✅ Even distribution (no hotspots)                                  │
+│  ✅ Even distribution of KEYS across shards                          │
 │  ✅ Works with any key type                                          │
 │  ❌ Range queries require scatter-gather                             │
 │  ❌ Adding shards requires rehashing (unless consistent hashing)     │
+│  ⚠️  Does NOT solve "hot key" problem (celebrity still on 1 shard!) │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -377,6 +447,10 @@ SHARDING SOLUTION:
 │  • Each physical shard has multiple positions on ring               │
 │  • Improves load balancing                                          │
 │  • Handles heterogeneous hardware                                   │
+│                                                                      │
+│  ⚠️  IMPORTANT: Consistent hashing solves RESHARDING, not HOT KEYS! │
+│  • Celebrity's data still lands on ONE shard                        │
+│  • See "The Hotspot Problem" section below for solutions            │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -447,35 +521,90 @@ Celebrity Taylor Swift: user_id = 12345
 ### Cross-Shard Operations
 
 ```
-PROBLEM: JOINs and transactions across shards are expensive
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE PROBLEM: JOINs ACROSS SHARDS                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  You have TWO TABLES that need to be joined:                                │
+│                                                                              │
+│  TABLE: users                    TABLE: orders                              │
+│  ┌──────────────────────┐        ┌─────────────────────────────────┐       │
+│  │ id │ name   │ email  │        │ order_id │ user_id │ total │ ...│       │
+│  │ 1  │ Alice  │ a@...  │        │ 101      │ 1       │ $50   │    │       │
+│  │ 2  │ Bob    │ b@...  │        │ 102      │ 2       │ $30   │    │       │
+│  │ 3  │ Carol  │ c@...  │        │ 103      │ 1       │ $75   │    │       │
+│  └──────────────────────┘        │ 104      │ 3       │ $20   │    │       │
+│                                  └─────────────────────────────────┘       │
+│                                                                              │
+│  QUERY: "Get all pending orders with user details"                          │
+│  SELECT * FROM orders o JOIN users u ON o.user_id = u.id                   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 
-QUERY: SELECT * FROM orders o 
-       JOIN users u ON o.user_id = u.id 
-       WHERE o.status = 'pending'
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SCENARIO A: BOTH tables sharded by user_id (CO-LOCATED) ✅                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Shard 0 (user_id % 2 = 0)         Shard 1 (user_id % 2 = 1)               │
+│  ┌───────────────────────────┐     ┌───────────────────────────┐           │
+│  │ users:                    │     │ users:                    │           │
+│  │   id=2 (Bob)              │     │   id=1 (Alice)            │           │
+│  │                           │     │   id=3 (Carol)            │           │
+│  │ orders:                   │     │ orders:                   │           │
+│  │   order_id=102, user_id=2 │     │   order_id=101, user_id=1 │           │
+│  │                           │     │   order_id=103, user_id=1 │           │
+│  └───────────────────────────┘     │   order_id=104, user_id=3 │           │
+│                                    └───────────────────────────┘           │
+│                                                                              │
+│  ✅ JOIN happens WITHIN each shard (no network hop!)                        │
+│  ✅ Each shard has the user AND their orders together                       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 
-If orders and users are sharded by user_id:
-✅ Join within same shard (co-located data)
-
-If orders sharded by order_id, users by user_id:
-❌ Every order needs a cross-shard lookup for user data!
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SCENARIO B: Tables sharded by DIFFERENT keys ❌                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  users sharded by user_id:         orders sharded by order_id:             │
+│                                                                              │
+│  Shard 0         Shard 1           Shard 0         Shard 1                 │
+│  ┌─────────┐     ┌─────────┐       ┌─────────┐     ┌─────────┐             │
+│  │ user 2  │     │ user 1  │       │ order   │     │ order   │             │
+│  │ (Bob)   │     │ (Alice) │       │ 102     │     │ 101     │             │
+│  │         │     │ user 3  │       │ 104     │     │ 103     │             │
+│  │         │     │ (Carol) │       │         │     │         │             │
+│  └─────────┘     └─────────┘       └─────────┘     └─────────┘             │
+│                                                                              │
+│  To JOIN order 101 with user 1:                                            │
+│                                                                              │
+│    Orders Shard 1          Users Shard 1                                   │
+│    ┌───────────┐           ┌───────────┐                                   │
+│    │ order 101 │ ────────► │ user 1    │   ← NETWORK HOP!                 │
+│    │ user_id=1 │  lookup   │ (Alice)   │                                   │
+│    └───────────┘           └───────────┘                                   │
+│                                                                              │
+│  ❌ EVERY order needs a cross-shard lookup to get user info!               │
+│  ❌ 1000 orders = 1000 network round trips (or batch, still slow)          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 
 SOLUTIONS:
 
 1. CO-LOCATE RELATED DATA
-   • Shard orders AND users by user_id
-   • Trade-off: Some queries become scatter-gather
+   • Shard BOTH tables by user_id (Scenario A above)
+   • Trade-off: "Find all orders" becomes scatter-gather
 
 2. DENORMALIZATION
-   • Store user name in orders table
+   • Store user_name directly in orders table
    • Trade-off: Data duplication, update complexity
 
 3. APPLICATION-LEVEL JOINS
-   • Fetch orders, then batch fetch users
+   • Fetch orders first, then batch fetch users by user_ids
    • Trade-off: More round trips, application complexity
 
 4. AVOID CROSS-SHARD TRANSACTIONS
-   • Saga pattern for distributed transactions
-   • Eventually consistent where possible
+   • Use Saga pattern for distributed transactions
+   • Accept eventual consistency where possible
 ```
 
 ### SQL Sharding: Add-On vs Native
@@ -744,13 +873,17 @@ With consensus (Raft/Paxos):
 │  4. Candidate with majority votes becomes new leader                 │
 │  5. New leader starts sending heartbeats                             │
 │                                                                      │
-│  LOG REPLICATION:                                                    │
+│  LOG REPLICATION (uses QUORUM internally!):                          │
 │  1. Client sends write to leader                                     │
 │  2. Leader appends to its log, sends to followers                    │
 │  3. Followers append to their logs, send ACK                         │
-│  4. Once majority ACKs, leader commits                               │
+│  4. Once majority ACKs, leader commits  ← This is W = majority!     │
 │  5. Leader notifies followers to commit                              │
 │  6. Client gets success response                                     │
+│                                                                      │
+│  NOTE: Raft uses quorum (majority = N/2 + 1) for commits.           │
+│  Difference from Dynamo-style quorum: Raft has a LEADER,            │
+│  Dynamo is leaderless (any node can accept writes).                 │
 │                                                                      │
 │  SAFETY GUARANTEES:                                                  │
 │  • At most one leader per term                                       │
@@ -776,12 +909,231 @@ With consensus (Raft/Paxos):
 3. DISTRIBUTED LOCKS
    • Exactly-once processing
    • Resource allocation
-   • Fencing tokens
+   • Fencing tokens (see below)
 
 4. ATOMIC BROADCAST
    • Total ordering of messages
    • Replicated state machines
    • Distributed transactions (2PC/3PC)
+```
+
+### Distributed Locks vs Database Locks
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│        DATABASE LOCKS (Level 2)  vs  DISTRIBUTED LOCKS (Level 3)            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  DATABASE LOCKS (What we covered in Level 2):                               │
+│  ─────────────────────────────────────────────                              │
+│  • Managed BY the database (PostgreSQL, MySQL)                              │
+│  • Scope: ONE database, transactions within that database                   │
+│  • Use case: Prevent lost updates, ensure isolation                        │
+│  • Examples: SELECT...FOR UPDATE, S-Lock, X-Lock, 2PL                      │
+│  • Automatic: Database handles lock acquisition/release                    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  Service A                                                          │   │
+│  │     │                                                               │   │
+│  │     └────► PostgreSQL ─── SELECT...FOR UPDATE ───► row locked      │   │
+│  │             (manages locks internally)                              │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  DISTRIBUTED LOCKS (This level):                                            │
+│  ─────────────────────────────────                                          │
+│  • Managed by EXTERNAL lock service (Redis, ZooKeeper, etcd)               │
+│  • Scope: MULTIPLE services/servers that DON'T share a database            │
+│  • Use case: Coordinate actions when there's NO shared database            │
+│  • Examples: Redis SETNX, Redlock, ZooKeeper locks                         │
+│  • Manual: YOU must handle expiry, renewal, fencing tokens                 │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  CONCRETE EXAMPLE: Cron Job on Multiple Servers                            │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SCENARIO: "Send daily email digest at 9 AM"                               │
+│  You have 5 app servers, each with a cron job scheduled for 9 AM.         │
+│                                                                              │
+│  ⚠️  WHY LOAD BALANCER CAN'T HELP:                                          │
+│  • Cron jobs are INTERNAL scheduled tasks, not external requests           │
+│  • Each server's cron daemon triggers independently at 9 AM                │
+│  • There's no incoming HTTP request for load balancer to route!            │
+│                                                                              │
+│  WITHOUT coordination: All 5 servers wake up at 9 AM → 5 emails sent!     │
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                       │ │
+│  │  At 9:00 AM, ALL servers wake up independently:                       │ │
+│  │                                                                       │ │
+│  │  Server 1 ───┐                                                        │ │
+│  │  Server 2 ───┤     ┌──────────────────┐                               │ │
+│  │  Server 3 ───┼────►│  Redis           │   Only ONE gets the lock!    │ │
+│  │  Server 4 ───┤     │  "daily_email"   │   That one sends the email.  │ │
+│  │  Server 5 ───┘     └──────────────────┘   Others see lock, skip.     │ │
+│  │                                                                       │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  CODE:                                                                      │
+│  # Each server runs this at 9 AM via cron                                  │
+│  if redis.setnx("daily_email_lock", server_id, expiry=60):                 │
+│      send_daily_email()                                                    │
+│      redis.delete("daily_email_lock")                                      │
+│  else:                                                                      │
+│      # Another server already has the lock, skip                           │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  SIMPLE LOCKS vs CONSENSUS-BASED LOCKS:                                    │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SIMPLE LOCK (Redis SETNX):                                                │
+│  • Single Redis server manages the lock                                    │
+│  • Fast and simple                                                         │
+│  • ❌ Single point of failure (Redis dies = lock lost)                     │
+│  • ❌ NOT using consensus                                                  │
+│  • Good for: Non-critical tasks (email digest, cache refresh)             │
+│                                                                              │
+│  CONSENSUS-BASED LOCK (ZooKeeper, etcd):                                   │
+│  • Lock state replicated across multiple nodes using Raft/Paxos           │
+│  • ✅ Survives node failures (majority must agree)                         │
+│  • ✅ Uses consensus internally                                            │
+│  • Slower, more complex                                                    │
+│  • Good for: Critical tasks (payment processing, leader election)         │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                     │   │
+│  │  Redis Lock:         ZooKeeper Lock:                               │   │
+│  │  ┌────────┐           ┌────────┐                                   │   │
+│  │  │ Redis  │           │ ZK Node│◄──┐                               │   │
+│  │  │(single)│           │   A    │   │ Raft/Paxos                   │   │
+│  │  └────────┘           └────────┘   │ replication                  │   │
+│  │      │                    ▲        │                               │   │
+│  │      │                    │        │                               │   │
+│  │  If Redis dies,       ┌──┴────┐ ┌─┴──────┐                        │   │
+│  │  lock is lost!        │ZK Node│ │ZK Node │                        │   │
+│  │                       │   B   │ │   C    │                        │   │
+│  │                       └───────┘ └────────┘                        │   │
+│  │                       If A dies, B or C takes over!              │   │
+│  │                                                                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  WHY CAN'T WE USE DATABASE LOCK HERE?                                       │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  • There's no "row" to lock - we're coordinating a TASK, not data         │
+│  • The job might call external APIs, not just database                    │
+│  • We need a lock BEFORE we decide what to do                             │
+│  • Database lock = "lock this data" | Distributed lock = "lock this task" │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  WHEN TO USE WHICH:                                                         │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  DATABASE LOCKS:                                                            │
+│  • "Lock this ROW while I update it"                                      │
+│  • Inventory decrement, bank transfer, booking seat                       │
+│  • You're protecting DATA in a database                                   │
+│                                                                              │
+│  DISTRIBUTED LOCKS:                                                         │
+│  • "Only ONE server should run this TASK"                                 │
+│  • Cron jobs, scheduled tasks, batch processing                           │
+│  • Leader election (only one server is "active")                          │
+│  • You're coordinating WORK across servers                                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Fencing Tokens (Preventing Zombie Leaders)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE PROBLEM: ZOMBIE LEADER                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO: Leader election for a database cluster                          │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  You have 3 servers: A, B, C. Only ONE can be leader (accept writes).      │
+│  ZooKeeper manages leader election.                                        │
+│                                                                              │
+│  T1: Server A is elected leader                                            │
+│  T2: Server A accepts writes, sends to storage                             │
+│  T3: Server A hits GC pause / network partition (stuck!)                   │
+│  T4: ZooKeeper: "A is unresponsive, elect new leader"                      │
+│  T5: Server B becomes new leader                                           │
+│  T6: Server B accepts writes, sends to storage                             │
+│  T7: Server A wakes up, STILL THINKS IT'S THE LEADER! 😱                   │
+│  T8: Server A accepts a write → CONFLICTS with B's writes!                 │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                     │   │
+│  │  Timeline:                                                          │   │
+│  │  ─────────────────────────────────────────────────────────────────  │   │
+│  │                                                                     │   │
+│  │  Server A: [LEADER]──writes──►[GC PAUSE 💤]──wakes up──►[writes!]  │   │
+│  │                                      │                    ↓         │   │
+│  │  ZooKeeper:               [A dead?]──┴──[elect B]        CONFLICT!  │   │
+│  │                                             │             ↑         │   │
+│  │  Server B:                           [LEADER]───writes───┘         │   │
+│  │                                                                     │   │
+│  │  RESULT: Two servers both think they're leader!                    │   │
+│  │          Data corruption, split-brain!                             │   │
+│  │                                                                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE SOLUTION: FENCING TOKENS                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  IDEA: Every leader election gets a monotonically increasing token (epoch).│
+│        Storage rejects writes from old leaders with outdated tokens.       │
+│                                                                              │
+│  HOW IT WORKS:                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  T1: Server A elected → gets epoch #33                                     │
+│  T2: Server A writes with epoch #33 → Storage accepts, stores epoch=33    │
+│  T5: Server B elected → gets epoch #34                                     │
+│  T6: Server B writes with epoch #34 → Storage updates epoch=34            │
+│  T7: Server A wakes up, writes with epoch #33                              │
+│  T8: Storage: "33 < 34? REJECTED! You're not the leader anymore!"         │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                     │   │
+│  │  Server A        ZooKeeper           Storage           Server B    │   │
+│  │     │                │                   │                  │       │   │
+│  │     │◄─leader #33────│                   │                  │       │   │
+│  │     │───write+#33───►│──────────────────►│ epoch=33         │       │   │
+│  │     │                │                   │                  │       │   │
+│  │     │  💤 PAUSE      │                   │                  │       │   │
+│  │     │                │                   │                  │       │   │
+│  │     │                │──leader #34──────►│──────────────────│       │   │
+│  │     │                │                   │◄───write+#34─────│       │   │
+│  │     │                │                   │ epoch=34         │       │   │
+│  │     │                │                   │                  │       │   │
+│  │     │───write+#33───►│──────────────────►│                  │       │   │
+│  │     │                │                   │ 33 < 34          │       │   │
+│  │     │◄───REJECTED!───│───────────────────│ NOT LEADER!      │       │   │
+│  │                                                                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  KEY POINTS:                                                                │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  1. The fencing token is a monotonically increasing number (epoch/term)    │
+│  2. STORAGE must check the token and reject old ones                       │
+│  3. ZooKeeper's zxid, Raft's term, Kafka's epoch are all fencing tokens   │
+│  4. Without fencing tokens, you get split-brain (two leaders)              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -819,9 +1171,68 @@ With consensus (Raft/Paxos):
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-> When multiple nodes can accept writes, conflicts are inevitable. How do we detect and resolve them?
+---
+
+### The Two Big Problems in Distributed Data
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    TWO CHALLENGES, DIFFERENT SOLUTIONS                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  When you have MULTIPLE NODES that can accept writes, you face:             │
+│                                                                              │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║  PROBLEM 1: WRITE CONFLICTS                                           ║  │
+│  ║  ─────────────────────────────────────────────────────────────────────║  │
+│  ║  "Two users update the SAME key on DIFFERENT nodes at the same time" ║  │
+│  ║                                                                       ║  │
+│  ║  Node A: name = "Alice"    Node B: name = "Alicia"                   ║  │
+│  ║                    ↘             ↙                                    ║  │
+│  ║                      WHICH WINS?                                      ║  │
+│  ║                                                                       ║  │
+│  ║  SOLUTIONS: LWW, Vector Clocks, CRDTs (see below)                    ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│                                                                              │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║  PROBLEM 2: REPLICA DIVERGENCE                                        ║  │
+│  ║  ─────────────────────────────────────────────────────────────────────║  │
+│  ║  "Replicas get out of sync due to failures, delays, or partitions"   ║  │
+│  ║                                                                       ║  │
+│  ║  Node A: version 5 ✓       Node B: version 5 ✓       Node C: version 3 ←STALE!║
+│  ║                                                                       ║  │
+│  ║  SOLUTIONS: Three layers of repair (see below)                       ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  THIS SECTION'S STORYLINE:                                                  │
+│                                                                              │
+│  1. WRITE CONFLICTS ────────────────────────────────────────────────────── │
+│     │                                                                       │
+│     ├── Last-Write-Wins (simple, but loses data)                           │
+│     ├── Vector Clocks (detect conflicts, let client resolve)              │
+│     └── CRDTs (auto-merge, no conflicts by design)                        │
+│                                                                              │
+│  2. REPLICA DIVERGENCE ─────────────────────────────────────────────────── │
+│     │                                                                       │
+│     ├── Hinted Handoff (PREVENT divergence during temp failures)          │
+│     │   └── "Node is down? Store hint, deliver when it's back"            │
+│     │                                                                       │
+│     ├── Read Repair (FIX divergence on-demand during reads)               │
+│     │   └── "Reading and found stale replica? Update it!"                 │
+│     │                                                                       │
+│     └── Anti-Entropy + Merkle Trees (FIX divergence in background)        │
+│         └── "Periodically compare and sync all replicas"                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
+
+## Part 1: Write Conflicts
+
+> When multiple nodes accept writes, which value wins?
 
 ### The Conflict Problem
 
@@ -834,12 +1245,41 @@ With consensus (Raft/Paxos):
 │                                                                              │
 │  TIME    NODE A (US)              NODE B (EU)                                │
 │  ─────────────────────────────────────────────────────────────────────────── │
-│  T1      User sets name="Alice"                                              │
-│  T2                               User sets name="Alicia"                    │
-│  T3      (network partition - nodes can't sync)                              │
-│  T4      (partition heals - sync happens)                                    │
+│  T1      User sets name="Alice"   (accepts locally, ACKs client)            │
+│  T2                               User sets name="Alicia" (accepts locally) │
+│  T3      ←──── async background replication ────→                           │
+│          (Leaders continuously stream changes to each other)                │
 │                                                                              │
 │  QUESTION: What is the user's name now? "Alice" or "Alicia"?                │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  WHEN DOES SYNC HAPPEN? (Multi-Leader)                                      │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  YES, both leaders sync! But ASYNCHRONOUSLY:                                │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                     │   │
+│  │  Leader A (US)                    Leader B (EU)                    │   │
+│  │     │                                │                              │   │
+│  │     │◄─── Background replication ───►│                              │   │
+│  │     │     (bidirectional, async)     │                              │   │
+│  │     │                                │                              │   │
+│  │  HOW:                                                               │   │
+│  │  • Each leader has a "change stream" or "replication log"          │   │
+│  │  • Continuously sends new writes to other leaders                  │   │
+│  │  • When conflicting writes arrive → CONFLICT RESOLUTION kicks in   │   │
+│  │                                                                     │   │
+│  │  TIMING:                                                            │   │
+│  │  • Usually milliseconds to seconds (depends on network)            │   │
+│  │  • During partition: changes queue up, sync when healed            │   │
+│  │                                                                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ⚠️  KEY INSIGHT: Conflicts are DETECTED during sync, not during write!    │
+│  Each leader happily accepts its write. Only when they exchange data       │
+│  do they realize "oops, we both wrote to the same key!"                    │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -980,18 +1420,294 @@ With consensus (Raft/Paxos):
 
 ---
 
-### Merkle Trees (Anti-Entropy / Consistency Verification)
+## Part 2: Keeping Replicas in Sync (Handling Divergence)
+
+> Conflicts are about "which value wins?" But what about replicas that simply missed an update due to failures or network issues? We need mechanisms to detect and repair divergence.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    MERKLE TREES                                              │
-│         "Efficiently detect which data is out of sync"                       │
+│                    THREE LAYERS OF REPLICA REPAIR                            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  PROBLEM: Node A has 1 billion keys, Node B has 1 billion keys.             │
-│           How do we find which keys are different WITHOUT comparing all?    │
+│  Think of these as defense layers - each handles different scenarios:      │
 │                                                                              │
-│  SOLUTION: Hash tree (Merkle tree)                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │                                                                         ││
+│  │  LAYER 1: HINTED HANDOFF                                               ││
+│  │  ─────────────────────────────────────────────────────────────────────  ││
+│  │  WHEN: Node is temporarily DOWN during a write                         ││
+│  │  HOW:  Store "hint" on another node, deliver when it recovers          ││
+│  │  GOAL: PREVENT divergence before it happens                            ││
+│  │                                                                         ││
+│  │  Timeline: Write arrives → Node down → Hint stored → Node up → Synced  ││
+│  │                                                                         ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│                          ↓                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │                                                                         ││
+│  │  LAYER 2: READ REPAIR                                                  ││
+│  │  ─────────────────────────────────────────────────────────────────────  ││
+│  │  WHEN: Client reads data and we notice a stale replica                 ││
+│  │  HOW:  Compare versions from multiple replicas, update stale ones      ││
+│  │  GOAL: FIX divergence on-demand (for HOT data that gets read often)   ││
+│  │                                                                         ││
+│  │  Timeline: Read request → Check replicas → Stale found → Update async  ││
+│  │                                                                         ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│                          ↓                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │                                                                         ││
+│  │  LAYER 3: ANTI-ENTROPY (with Merkle Trees)                             ││
+│  │  ─────────────────────────────────────────────────────────────────────  ││
+│  │  WHEN: Background process runs periodically (every 10 mins)            ││
+│  │  HOW:  Compare Merkle tree hashes to find divergent keys efficiently   ││
+│  │  GOAL: FIX divergence for COLD data that's rarely read                 ││
+│  │                                                                         ││
+│  │  Timeline: Every N mins → Compare hashes → Find diff → Sync keys       ││
+│  │                                                                         ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│                                                                              │
+│  WHY ALL THREE?                                                             │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  • Hinted Handoff: Fast, but hints can expire or be lost                   │
+│  • Read Repair: Fast for hot data, but cold data never gets fixed          │
+│  • Anti-Entropy: Catches everything, but adds background load              │
+│                                                                              │
+│  Together: Eventually consistent with good performance trade-offs!         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Layer 1: Hinted Handoff (Preventing Divergence)
+
+> **First line of defense**: When a node is temporarily down, don't let it miss data.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    HINTED HANDOFF                                            │
+│         "Write now, sync later when node recovers"                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  PROBLEM:                                                                   │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  You want to write to Node A, but Node A is temporarily down.              │
+│                                                                              │
+│  OPTIONS:                                                                   │
+│  1. Fail the write → Bad for availability!                                 │
+│  2. Write only to available nodes → Node A misses data forever?            │
+│  3. Hinted Handoff → Write succeeds, A gets data when it recovers ✓        │
+│                                                                              │
+│  HOW IT WORKS:                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SCENARIO: Write to replicas A, B, C. Node A is down.                      │
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                       │ │
+│  │  Client                                                               │ │
+│  │     │                                                                 │ │
+│  │     ├──write──► Node A (DOWN! ❌)                                     │ │
+│  │     │                                                                 │ │
+│  │     ├──write──► Node B ✓  (stores normally)                          │ │
+│  │     │                                                                 │ │
+│  │     └──write──► Node C ✓  (stores normally)                          │ │
+│  │                    │                                                  │ │
+│  │                    └──► ALSO stores "hint" for Node A:               │ │
+│  │                         "When A is back, give it this data"          │ │
+│  │                                                                       │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  LATER, WHEN NODE A RECOVERS:                                               │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                       │ │
+│  │  Node A comes back online                                             │ │
+│  │     │                                                                 │ │
+│  │     │◄──────── Node C sends "hinted" data ────────┐                  │ │
+│  │     │                                              │                  │ │
+│  │     ▼                                              │                  │ │
+│  │  Node A now has the data!                    Hint delivered,         │ │
+│  │  Replicas A, B, C are in sync.               hint deleted.           │ │
+│  │                                                                       │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  KEY POINTS:                                                                │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  1. HINT STORAGE: The hint is stored on another node (C in example)        │
+│     - Contains: "for Node A" + the actual data                             │
+│     - Temporary: deleted after successful handoff                          │
+│                                                                              │
+│  2. SLOPPY QUORUM: Can write to "substitute" node if original is down     │
+│     - W=2 needed → A down → write to B, C instead                         │
+│     - Maintains write availability during failures                         │
+│                                                                              │
+│  3. LIMITATIONS (Why we need more layers!):                                │
+│     - Hints have TTL (e.g., 3 hours in Cassandra)                          │
+│     - If A is down too long, hint expires → Layer 2 or 3 must fix it      │
+│     - Hints stored in memory/disk → node crash = hints lost               │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  ⚠️  WHICH SYSTEMS USE THIS?                                                │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  LEADERLESS (Dynamo-style): ✅ YES - Primary use case!                      │
+│  • Cassandra, Riak, DynamoDB, Voldemort                                    │
+│  • Any node can accept writes, so sloppy quorum makes sense               │
+│  • If preferred replica is down, write to substitute + hint               │
+│                                                                              │
+│  MULTI-LEADER: ✅ Sometimes (within each leader's replica set)             │
+│  • Each leader may have followers; hinted handoff can apply there         │
+│                                                                              │
+│  SINGLE-LEADER: ❌ NOT applicable                                          │
+│  • Only ONE node (leader) accepts writes                                   │
+│  • If leader fails → FAILOVER (elect new leader via consensus)            │
+│  • No "substitute node" concept - writes blocked until new leader         │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  Single-Leader Failure:        Leaderless Failure:                 │   │
+│  │  ─────────────────────         ───────────────────                 │   │
+│  │                                                                     │   │
+│  │  Leader down?                  Node A down?                        │   │
+│  │     ↓                             ↓                                │   │
+│  │  WAIT for failover!           Write to B, C instead!              │   │
+│  │  (Raft elects new leader)     (Store hint for A)                  │   │
+│  │     ↓                             ↓                                │   │
+│  │  Writes blocked briefly       Writes continue! ✓                  │   │
+│  │                                                                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  USED BY: Cassandra, Riak, DynamoDB, Voldemort (all leaderless)            │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  SLOPPY QUORUM VISUALIZATION:                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  STRICT QUORUM (W=2 of A, B, C):                                           │
+│  A down → Can't achieve quorum → WRITE FAILS!                              │
+│                                                                              │
+│  SLOPPY QUORUM (W=2, any 2 of A, B, C, D, E...):                          │
+│  A down → Write to B + D (D holds hint for A) → WRITE SUCCEEDS!           │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                     │   │
+│  │  Ring with 5 nodes, data should go to A, B, C:                     │   │
+│  │  (A is down, so we use D as substitute)                            │   │
+│  │                                                                     │   │
+│  │              ┌───┐                                                  │   │
+│  │         ┌────│ A │◄─── DOWN!                                       │   │
+│  │         │    └───┘                                                  │   │
+│  │       ┌───┐       ┌───┐                                            │   │
+│  │       │ E │       │ B │ ◄─── Gets write (regular replica, NO hint)│   │
+│  │       └───┘       └───┘                                            │   │
+│  │         │    ┌───┐   │                                              │   │
+│  │         └────│ D │◄──┴── Gets write + HINT for A                   │   │
+│  │              └───┘       (D is SUBSTITUTE for A)                   │   │
+│  │                                                                     │   │
+│  │  WHO STORES HINTS?                                                 │   │
+│  │  ─────────────────────────────────────────────────────────────────  │   │
+│  │  • B: Regular replica → stores data ONLY (no hint)                │   │
+│  │  • D: Substitute for A → stores data + HINT for A                 │   │
+│  │                                                                     │   │
+│  │  WHY? D knows "I'm not supposed to have this data permanently.    │   │
+│  │  When A comes back, I need to hand it off." B doesn't need a      │   │
+│  │  hint because B is a legitimate replica for this key.             │   │
+│  │                                                                     │   │
+│  │  Result: W=2 achieved (B + D), data not lost!                      │   │
+│  │                                                                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Layer 2: Read Repair (Fixing Divergence On-Demand)
+
+> **Second line of defense**: When a client reads, check if replicas are in sync. If not, fix them.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    READ REPAIR                                               │
+│         "Notice stale data during reads, fix it immediately"                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO: Client reads key "user:100" from 3 replicas (quorum read)       │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                       │ │
+│  │  Client                           Coordinator                         │ │
+│  │     │                                │                                │ │
+│  │     │─── READ "user:100" ───────────►│                                │ │
+│  │     │                                │                                │ │
+│  │     │                   ┌────────────┼────────────┐                   │ │
+│  │     │                   │            │            │                   │ │
+│  │     │                   ▼            ▼            ▼                   │ │
+│  │     │              Replica A    Replica B    Replica C               │ │
+│  │     │              version=5    version=5    version=3 ← STALE!      │ │
+│  │     │              name=Alice   name=Alice   name=Al                 │ │
+│  │     │                   │            │            │                   │ │
+│  │     │                   └────────────┼────────────┘                   │ │
+│  │     │                                │                                │ │
+│  │     │                     Coordinator notices:                        │ │
+│  │     │                     "C has old version!"                        │ │
+│  │     │                                │                                │ │
+│  │     │◄──── Return version 5 ─────────│                                │ │
+│  │     │      (Alice)                   │                                │ │
+│  │     │                                │                                │ │
+│  │     │                  (async) ──────┴──────► Update Replica C       │ │
+│  │     │                                         with version 5         │ │
+│  │                                                                       │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  KEY POINTS:                                                                │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  1. HAPPENS DURING READS: No extra background process needed               │
+│  2. ASYNC UPDATE: Client doesn't wait for repair to complete               │
+│  3. GREAT FOR HOT DATA: Frequently read keys get fixed quickly             │
+│  4. LIMITATION: Cold data (rarely read) stays stale forever!               │
+│     → That's why we need Layer 3 (Anti-Entropy)                            │
+│                                                                              │
+│  USED BY: Cassandra, Riak, DynamoDB                                        │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Layer 3: Anti-Entropy with Merkle Trees (Background Repair)
+
+> **Third line of defense**: Periodically compare ALL data across replicas and fix any divergence. Catches cold data that read repair misses.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE CHALLENGE                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Node A has 1 billion keys, Node B has 1 billion keys.                      │
+│  Some keys might be out of sync. How do we find them efficiently?          │
+│                                                                              │
+│  NAIVE APPROACH: Compare all 1 billion keys = 1 billion network calls! ❌   │
+│                                                                              │
+│  SMART APPROACH: Use Merkle Trees for O(log N) comparisons! ✓              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    MERKLE TREES                                              │
+│         "Hash trees that efficiently detect which data is out of sync"      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Each node builds a hash tree of its data:                                 │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────────┐│
 │  │                         ROOT HASH                                        ││
@@ -1016,6 +1732,7 @@ With consensus (Raft/Paxos):
 │  └─────────────────────────────────────────────────────────────────────────┘│
 │                                                                              │
 │  SYNC PROCESS:                                                               │
+│  ─────────────────────────────────────────────────────────────────────────  │
 │                                                                              │
 │  1. Node A sends root hash to Node B                                        │
 │  2. Node B compares: Same? → In sync! Different? → Drill down               │
@@ -1034,50 +1751,39 @@ With consensus (Raft/Paxos):
 │  USED BY: Cassandra (anti-entropy repair), Bitcoin, Git, IPFS               │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
-```
 
----
-
-### Read Repair & Anti-Entropy
-
-```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    KEEPING REPLICAS IN SYNC                                  │
+│                    ANTI-ENTROPY PROCESS                                      │
+│         "Periodic background job that uses Merkle trees to sync"            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  1. READ REPAIR (On-demand, during reads)                                   │
-│  ───────────────────────────────────────────────────────────────────────────│
+│  Every 10 minutes (configurable):                                           │
 │                                                                              │
-│  Client reads key "user:100" from 3 replicas (quorum read):                │
-│                                                                              │
-│  Replica A: {name: "Alice", version: 5}                                     │
-│  Replica B: {name: "Alice", version: 5}                                     │
-│  Replica C: {name: "Al", version: 3}     ← STALE!                           │
-│                                                                              │
-│  Coordinator notices version mismatch:                                       │
-│  → Return version 5 to client                                               │
-│  → Asynchronously UPDATE Replica C with version 5                           │
-│                                                                              │
-│  2. ANTI-ENTROPY (Background, periodic)                                     │
-│  ───────────────────────────────────────────────────────────────────────────│
-│                                                                              │
-│  Background process compares Merkle trees between replicas:                 │
-│                                                                              │
-│  Every 10 minutes:                                                          │
 │  1. Node A and Node B exchange Merkle root hashes                           │
 │  2. If different, drill down to find divergent keys                         │
 │  3. Exchange and reconcile those specific keys                              │
+│  4. Both nodes now in sync!                                                 │
 │                                                                              │
-│  WHY BOTH?                                                                   │
-│  • Read repair: Fixes hot (frequently read) data quickly                    │
-│  • Anti-entropy: Fixes cold (rarely read) data eventually                   │
+│  WHY THIS IS LAYER 3 (last resort):                                         │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  • Runs periodically (not real-time like Layer 1 & 2)                       │
+│  • Adds background load (computing hashes, network traffic)                 │
+│  • But catches EVERYTHING that Layer 1 & 2 missed!                          │
+│                                                                              │
+│  PERFECT FOR:                                                               │
+│  • Cold data that's rarely read (read repair never triggered)              │
+│  • Data missed when hints expired (node down too long)                      │
+│  • Recovering from corruption or bugs                                       │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### Conflict Resolution Summary
+### Section 5 Summary
+
+**Part 1: Write Conflict Resolution** (Which value wins?)
 
 | Strategy | Data Loss? | Complexity | Best For |
 |----------|------------|------------|----------|
@@ -1085,6 +1791,31 @@ With consensus (Raft/Paxos):
 | **Vector Clocks** | No (client resolves) | Medium | Shopping carts, docs |
 | **CRDTs** | No (auto-merge) | High | Counters, sets, collab editing |
 | **Application Logic** | No (custom) | High | Domain-specific rules |
+
+**Part 2: Replica Sync Mechanisms** (Keeping replicas consistent)
+
+| Layer | Mechanism | When It Runs | Best For |
+|-------|-----------|--------------|----------|
+| **1** | Hinted Handoff | During writes (node down) | Temp failures (minutes/hours) |
+| **2** | Read Repair | During reads | Hot data (frequently accessed) |
+| **3** | Anti-Entropy | Background (periodic) | Cold data, long outages |
+
+```
+DECISION FLOW: How does divergence get fixed?
+
+Node goes down during write?
+├── YES → Hinted Handoff (Layer 1): Store hint, deliver on recovery
+│         ↓
+│         Hint expired? (node down too long)
+│         ├── NO → Node recovers, gets hinted data ✓
+│         └── YES → Fall through to Layer 2 or 3
+│
+└── NO → Data written, but some replicas might be stale
+         ↓
+         Is this key frequently read?
+         ├── YES → Read Repair (Layer 2): Fixed during next read ✓
+         └── NO → Anti-Entropy (Layer 3): Fixed during background sync ✓
+```
 
 ---
 
