@@ -59,12 +59,111 @@
 
 ---
 
+## What Problem Are We Solving?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    REAL-TIME UPDATES: THE BIG PICTURE                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ⚠️  CLARIFICATION: This is NOT about responding to the user who made      │
+│  the change. That's simple (API response). This is about notifying         │
+│  OTHER users/systems in real-time!                                          │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  WHAT WE'RE NOT SOLVING (already works):                                   │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  Alice sends a message:                                                     │
+│                                                                              │
+│  Alice ──► API ──► Save to DB ──► Return "Sent!" to Alice ✅               │
+│                                                                              │
+│  Alice knows her message was sent. Done! No real-time magic needed.        │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  WHAT WE ARE SOLVING:                                                       │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  How does BOB see Alice's message instantly (without refreshing)?          │
+│                                                                              │
+│  Alice ──► API ──► Save to DB ──► ??? ──► Bob's screen updates! 📱         │
+│                                                                              │
+│  Bob didn't make a request. Bob is just sitting there. How does his        │
+│  app KNOW that Alice sent something?                                        │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  REAL-WORLD EXAMPLES:                                                       │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  ┌─────────────────────────┬────────────────────────────────────────────┐  │
+│  │ Scenario                │ Who needs real-time updates?               │  │
+│  ├─────────────────────────┼────────────────────────────────────────────┤  │
+│  │ Chat app                │ Other participants in the conversation     │  │
+│  │ Social media            │ Followers see new posts without refresh    │  │
+│  │ Collaborative editing   │ Other editors see changes live (Docs/Figma)│  │
+│  │ Live dashboard          │ Viewers see metrics update automatically   │  │
+│  │ Notifications           │ "Your order shipped" appears instantly     │  │
+│  │ Gaming                  │ Other players see your moves in real-time  │  │
+│  │ Stock ticker            │ Prices update without page refresh         │  │
+│  └─────────────────────────┴────────────────────────────────────────────┘  │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  THIS LEVEL COVERS:                                                         │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  1. TWO-HOP PROBLEM: How to get data from DB → Server → Client             │
+│  2. CDC: How Server learns about DB changes (Hop 1)                        │
+│  3. WebSockets/SSE: How Client learns about Server changes (Hop 2)         │
+│  4. FAN-OUT: How to efficiently notify many users at once                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Table of Contents
+
+- [What Problem Are We Solving?](#what-problem-are-we-solving)
+
 1. [The Two-Hop Problem](#1-the-two-hop-problem)
+   - [The Challenge](#the-challenge)
+   - [The Naive Approach (Polling)](#the-naive-approach-whats-wrong-with-polling)
+   - [The Modern Architecture](#the-modern-architecture)
+
 2. [CDC (Change Data Capture)](#2-cdc-change-data-capture)
+   - [What is CDC?](#what-is-cdc)
+   - [How CDC Works](#how-cdc-works)
+   - [CDC Use Cases](#cdc-use-cases)
+   - [CDC Tools Comparison](#cdc-tools-comparison)
+
 3. [WebSockets vs SSE](#3-websockets-vs-sse)
+   - [WebSockets](#websockets)
+   - [Server-Sent Events (SSE)](#server-sent-events-sse)
+   - [Head-to-Head Comparison](#head-to-head-comparison)
+   - [HTTP/2 Multiplexing & Connection Limits](#understanding-http2-multiplexing--connection-limits)
+   - [Decision Framework](#decision-framework)
+
 4. [Fan-out Patterns](#4-fan-out-patterns)
+   - [The Celebrity Problem](#the-celebrity-problem)
+   - [Fan-out Strategies](#fan-out-strategies)
+     - [Fan-out on Write (Push)](#fan-out-on-write-push-model)
+     - [Fan-out on Read (Pull)](#fan-out-on-read-pull-model)
+     - [Hybrid Fan-out](#hybrid-fan-out-the-twitter-approach)
+   - [Outbox Pattern + Background Workers](#outbox-pattern--background-workers)
+   - [Redis Pub/Sub for Real-Time Delivery](#redis-pubsub-for-real-time-delivery)
+     - [Timeline Cache vs Pub/Sub](#️-important-clarification-two-separate-systems)
+     - [Alternative: Kafka for Persistence](#alternative-kafka-for-message-persistence)
+
 5. [Interview Checklist](#5-interview-checklist)
+   - [CDC Questions](#cdc)
+   - [WebSocket/SSE Questions](#websocketsse)
+   - [Fan-out Questions](#fan-out)
+   - [Architecture Diagram Reference](#architecture-diagram-reference)
+   - [Common Pitfalls](#common-pitfalls)
 
 ---
 
@@ -164,14 +263,16 @@ CLIENT POLLING:
 │      "Watch the database's internal log to capture every change"     │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│  Traditional approach (application-level):                          │
+│  OPTION 1: Application-level events (manual):                       │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  // In every UPDATE/INSERT in your code:                      │   │
 │  │  db.update(user);                                             │   │
-│  │  eventBus.emit('user.updated', user);  // Easy to forget!     │   │
+│  │  response.send("Success");     // API response (sync) ✅       │   │
+│  │  eventBus.emit('user.updated', user);  // For downstream (async)│   │
+│  │                                // ⚠️ Easy to forget!          │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                                                                      │
-│  PROBLEMS:                                                           │
+│  PROBLEMS with Option 1:                                            │
 │  • DBA runs: UPDATE users SET active=false WHERE last_login < ...   │
 │    → No event emitted! Your cache is now stale.                     │
 │  • Migration script updates data                                     │
@@ -179,11 +280,12 @@ CLIENT POLLING:
 │  • Another service writes directly to DB                            │
 │    → No event emitted!                                              │
 │                                                                      │
-│  CDC approach (database-level):                                     │
+│  OPTION 2: CDC (database-level - automatic):                        │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  CDC (e.g., Debezium) reads the WAL/binlog directly           │   │
 │  │  EVERY change is captured, regardless of source                │   │
 │  │  No application code changes needed                            │   │
+│  │  Downstream systems subscribe to the CDC stream                │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
@@ -402,6 +504,165 @@ CLIENT POLLING:
 | **Browser support** | All modern | All modern (except IE) |
 | **Connection limit** | No limit | 6 per domain (HTTP/1.1) |
 | **Complexity** | Higher | Lower |
+
+#### Understanding HTTP/2 Multiplexing & Connection Limits
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    HTTP/2 MULTIPLEXING EXPLAINED                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WHAT IS MULTIPLEXING?                                                       │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  HTTP/2 allows multiple streams (requests/responses) to share ONE TCP       │
+│  connection. Think of it as multiple lanes on a single highway.             │
+│                                                                              │
+│  HTTP/1.1 (Without Multiplexing):                                            │
+│  ────────────────────────────────                                            │
+│                                                                              │
+│  Browser ──── TCP Connection 1 ────► SSE Stream (notifications)             │
+│          ──── TCP Connection 2 ────► SSE Stream (stock prices)              │
+│          ──── TCP Connection 3 ────► SSE Stream (chat messages)             │
+│          ──── TCP Connection 4 ────► Regular HTTP request                   │
+│          ──── TCP Connection 5 ────► Regular HTTP request                   │
+│          ──── TCP Connection 6 ────► Regular HTTP request                   │
+│          ──── ❌ BLOCKED! ───────────► (7th connection must wait)           │
+│                                                                              │
+│  PROBLEM: Each SSE stream "uses up" one of your 6 connection slots!         │
+│                                                                              │
+│  HTTP/2 (With Multiplexing):                                                 │
+│  ─────────────────────────────                                               │
+│                                                                              │
+│  Browser ═══════════ ONE TCP Connection ═══════════► Server                 │
+│              │                                                               │
+│              ├── Stream 1: SSE (notifications)                               │
+│              ├── Stream 2: SSE (stock prices)                                │
+│              ├── Stream 3: SSE (chat messages)                               │
+│              ├── Stream 4: Regular HTTP request                              │
+│              ├── Stream 5: Regular HTTP request                              │
+│              └── Stream N: ... (virtually unlimited!)                        │
+│                                                                              │
+│  BENEFIT: All SSE streams share ONE connection, no limit concerns!          │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  WHY WEBSOCKET DOESN'T BENEFIT:                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  WebSocket Protocol Upgrade:                                                 │
+│  ───────────────────────────                                                 │
+│                                                                              │
+│  1. Browser sends HTTP request:                                              │
+│     GET /chat HTTP/1.1                                                       │
+│     Upgrade: websocket                                                       │
+│     Connection: Upgrade                                                      │
+│                                                                              │
+│  2. Server responds:                                                         │
+│     HTTP/1.1 101 Switching Protocols                                         │
+│     Upgrade: websocket                                                       │
+│                                                                              │
+│  3. ⚡ Protocol CHANGES from HTTP to WebSocket (ws:// or wss://)            │
+│     The TCP connection is now a WebSocket connection, NOT HTTP anymore!     │
+│                                                                              │
+│  Browser ──── TCP (WebSocket) ────► Chat connection                         │
+│          ──── TCP (WebSocket) ────► Game connection                         │
+│          ──── TCP (HTTP/2) ────────► Everything else                        │
+│                                                                              │
+│  RESULT: Each WebSocket = its own dedicated TCP connection                  │
+│          HTTP/2 multiplexing only works for HTTP traffic                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CONNECTION LIMITS EXPLAINED                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  THE 6-CONNECTION LIMIT (HTTP/1.1)                                           │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  WHY THE LIMIT EXISTS:                                                       │
+│  • Prevents browsers from overwhelming servers                               │
+│  • Ensures fair resource sharing across tabs/sites                          │
+│  • Legacy design from early web days                                        │
+│                                                                              │
+│  HOW IT WORKS:                                                               │
+│  • Limit is PER DOMAIN (e.g., api.example.com)                              │
+│  • Chrome, Firefox, Edge: ~6 connections per domain (HTTP/1.1)              │
+│  • This limit is for ALL types of HTTP connections                          │
+│                                                                              │
+│  EXAMPLE - Dashboard with Multiple Real-time Feeds (HTTP/1.1):              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  TRADING DASHBOARD (api.trading.com)                                │   │
+│  │                                                                      │   │
+│  │  SSE: Stock prices      ──► Uses connection 1                       │   │
+│  │  SSE: News feed         ──► Uses connection 2                       │   │
+│  │  SSE: Portfolio updates ──► Uses connection 3                       │   │
+│  │  SSE: Alerts            ──► Uses connection 4                       │   │
+│  │  SSE: Market indices    ──► Uses connection 5                       │   │
+│  │  SSE: Currency rates    ──► Uses connection 6                       │   │
+│  │                                                                      │   │
+│  │  User clicks "Buy Stock" button...                                  │   │
+│  │  HTTP POST /api/orders ──► ⏳ WAITING (no available connection!)    │   │
+│  │                                                                      │   │
+│  │  ❌ PROBLEM: All 6 slots used by SSE, normal requests are BLOCKED!  │   │
+│  │                                                                      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  WHY WEBSOCKET ISN'T AFFECTED:                                               │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  • WebSocket connections upgrade AWAY from HTTP                             │
+│  • After upgrade, they're WebSocket protocol, not HTTP                      │
+│  • Browser's HTTP connection limit doesn't apply to WebSocket               │
+│  • You can have many WebSocket connections without blocking HTTP            │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  Same dashboard with WebSocket:                                      │   │
+│  │                                                                      │   │
+│  │  WebSocket: All feeds ──► 1 WebSocket connection (NOT counted)      │   │
+│  │  HTTP: Buy order      ──► Uses HTTP connection 1 ✅                 │   │
+│  │  HTTP: Get history    ──► Uses HTTP connection 2 ✅                 │   │
+│  │  ... plenty of room!                                                │   │
+│  │                                                                      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  SOLUTIONS FOR SSE CONNECTION LIMIT:                                         │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  1. USE HTTP/2:                                                              │
+│     • All SSE streams multiplex over ONE connection                         │
+│     • No more 6-connection limit concern                                    │
+│     • Most modern servers/browsers support HTTP/2                           │
+│                                                                              │
+│  2. MULTIPLEX EVENTS IN ONE SSE STREAM:                                      │
+│     • Instead of 6 separate SSE connections...                              │
+│     • Use 1 SSE connection with event types:                                │
+│                                                                              │
+│     event: stock_price                                                       │
+│     data: {"symbol": "AAPL", "price": 175.50}                               │
+│                                                                              │
+│     event: news                                                              │
+│     data: {"headline": "Fed raises rates"}                                  │
+│                                                                              │
+│     event: alert                                                             │
+│     data: {"message": "AAPL hit target price"}                              │
+│                                                                              │
+│  3. USE SUBDOMAINS (workaround):                                             │
+│     • api1.example.com, api2.example.com, etc.                              │
+│     • Each subdomain gets its own 6-connection pool                         │
+│     • Not ideal (complexity, DNS lookups)                                   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+> **💡 PRACTICAL RECOMMENDATION:**
+> - If using SSE with HTTP/1.1: Multiplex multiple event types in ONE SSE connection
+> - If using HTTP/2: Connection limits are not a concern for SSE
+> - If you need many real-time streams + heavy HTTP traffic: Consider WebSocket
 
 ### Decision Framework
 
@@ -636,37 +897,206 @@ CLIENT POLLING:
 
 ### Redis Pub/Sub for Real-Time Delivery
 
+**The Problem: How to Connect Backend Workers to WebSocket Servers?**
+
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    REDIS PUB/SUB FOR ACTIVE USERS                    │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  OPTIMIZATION: Only push to users who are currently online          │
-│                                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │                       ARCHITECTURE                            │   │
-│  │                                                               │   │
-│  │   Fan-out Worker                                              │   │
-│  │        │                                                      │   │
-│  │        ├──► Write to timeline cache (for ALL followers)       │   │
-│  │        │                                                      │   │
-│  │        └──► redis.publish(f"user:{id}", post)                 │   │
-│  │             (only for ONLINE followers)                       │   │
-│  │                                                               │   │
-│  │   WebSocket Server                                            │   │
-│  │        │                                                      │   │
-│  │        ├──► redis.subscribe(f"user:{connected_user_id}")      │   │
-│  │        │                                                      │   │
-│  │        └──► on_message: websocket.send(post)                  │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│  RESULT:                                                             │
-│  • Online users see posts instantly (via Pub/Sub → WebSocket)       │
-│  • Offline users see posts on next app open (from timeline cache)  │
-│  • No wasted Pub/Sub messages to offline users                      │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE ARCHITECTURE PROBLEM                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  You have SEPARATE systems that need to communicate:                        │
+│                                                                              │
+│  ┌─────────────────┐          ┌─────────────────────────────────────┐       │
+│  │  Fan-out Worker │          │  WebSocket Servers (many instances) │       │
+│  │  (Backend)      │          │  (Hold live connections to users)   │       │
+│  │                 │          │                                     │       │
+│  │  Processes new  │   ???    │  Server 1: Users A, B, C connected  │       │
+│  │  posts, updates │ ───────► │  Server 2: Users D, E connected     │       │
+│  │  timelines      │          │  Server 3: Users F, G, H connected  │       │
+│  └─────────────────┘          └─────────────────────────────────────┘       │
+│                                                                              │
+│  PROBLEM: How does the fan-out worker tell WebSocket servers to push?       │
+│           Worker doesn't know which server holds which user's connection!   │
+│                                                                              │
+│  SOLUTION: Redis Pub/Sub as a MESSAGE BUS                                    │
+│  • Fan-out worker publishes to Redis channel "user:{user_id}"               │
+│  • WebSocket servers subscribe to channels for their connected users        │
+│  • Redis routes the message to the right server automatically!              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Step-by-Step Example:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    REDIS PUB/SUB FLOW                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO: Alice posts "Hello World!" → Her follower Bob should see it     │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  STEP 1: Bob opens the app (goes online)                                    │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│                                                                              │
+│  ┌─────────┐                    ┌─────────────────┐       ┌───────┐         │
+│  │  Bob's  │ ── WebSocket ────► │ WebSocket       │       │ Redis │         │
+│  │  Phone  │    Connection      │ Server 2        │       │       │         │
+│  └─────────┘                    │                 │       │       │         │
+│                                 │ SUBSCRIBE to:   │ ◄──── │       │         │
+│                                 │ "user:bob"      │       │       │         │
+│                                 └─────────────────┘       └───────┘         │
+│                                                                              │
+│  → WebSocket server says: "I'm now listening for messages for Bob"          │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  STEP 2: Alice posts "Hello World!"                                         │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│                                                                              │
+│  ┌─────────────────┐       ┌───────┐       ┌─────────────────┐              │
+│  │  Fan-out Worker │       │ Redis │       │ WebSocket       │              │
+│  │                 │       │       │       │ Server 2        │              │
+│  │ 1. Write to     │       │       │       │                 │              │
+│  │    Bob's cache  │       │PUBLISH│       │ Receives msg!   │              │
+│  │    (for later)  │       │       │       │                 │              │
+│  │                 │ ────► │"user: │ ────► │ Pushes to Bob   │              │
+│  │ 2. Publish to   │       │ bob"  │       │ via WebSocket   │              │
+│  │    "user:bob"   │       │       │       │                 │              │
+│  └─────────────────┘       └───────┘       └────────┬────────┘              │
+│                                                     │                        │
+│                                                     ▼                        │
+│                                             ┌─────────────┐                  │
+│                                             │ Bob's Phone │                  │
+│                                             │ sees post   │                  │
+│                                             │ INSTANTLY!  │                  │
+│                                             └─────────────┘                  │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  STEP 3: Carol (another follower) is OFFLINE                                │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│                                                                              │
+│  ┌─────────────────┐                                                        │
+│  │  Fan-out Worker │                                                        │
+│  │                 │                                                        │
+│  │ 1. Write to     │ ✅ Carol will see post when she opens app              │
+│  │    Carol's cache│    (reads from cache)                                  │
+│  │                 │                                                        │
+│  │ 2. Publish to   │ → No WebSocket server is subscribed to "user:carol"   │
+│  │    "user:carol" │   (she's offline, no active connection)               │
+│  │                 │                                                        │
+│  │                 │ → Redis just DROPS the message (no subscribers)        │
+│  │                 │   No wasted resources!                                 │
+│  └─────────────────┘                                                        │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Summary: Online vs Offline Users**
+
+| User State | What Happens |
+|------------|--------------|
+| **Online** (WebSocket connected) | 1. Post written to timeline cache<br>2. Redis Pub/Sub → WebSocket → **Instant notification!** |
+| **Offline** (app closed) | 1. Post written to timeline cache<br>2. Pub/Sub message dropped (no subscriber)<br>3. User opens app → reads from timeline cache |
+
+#### ⚠️ Important Clarification: Two Separate Systems!
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    TIMELINE CACHE vs PUB/SUB                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  These are TWO SEPARATE writes - don't confuse them!                        │
+│                                                                              │
+│  Fan-out Worker does BOTH for each follower:                                │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                      │   │
+│  │  1. TIMELINE CACHE (Persistent Storage)                              │   │
+│  │     ─────────────────────────────────────────────────────────────    │   │
+│  │     LPUSH timeline:bob "{post: 'Hello from Alice'}"                  │   │
+│  │                                                                      │   │
+│  │     • Bob's feed - ALL posts stored here                            │   │
+│  │     • Persists until TTL or cleanup                                 │   │
+│  │     • When Bob opens app → reads from HERE                          │   │
+│  │                                                                      │   │
+│  │  2. PUB/SUB NOTIFICATION (Ephemeral Signal)                          │   │
+│  │     ─────────────────────────────────────────────────────────────    │   │
+│  │     PUBLISH user:bob "{post: 'Hello from Alice'}"                    │   │
+│  │                                                                      │   │
+│  │     • Just a real-time "ping" to online users                       │   │
+│  │     • If Bob offline → message DROPPED (that's okay!)               │   │
+│  │     • Post is already saved in timeline cache above                 │   │
+│  │                                                                      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  HOW OFFLINE USERS SEE POSTS:                                                │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  1. Alice posts "Hello!" (Bob is offline)                                   │
+│  2. Fan-out writes to timeline:bob ✅ (saved)                               │
+│  3. Fan-out publishes to user:bob ❌ (dropped, no subscriber)               │
+│  4. Bob opens app later                                                     │
+│  5. App calls: GET timeline:bob → sees Alice's post! ✅                     │
+│                                                                              │
+│  The Pub/Sub drop doesn't matter - the post was already in the cache!      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Alternative: Kafka for Message Persistence
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    KAFKA vs REDIS PUB/SUB FOR REAL-TIME DELIVERY             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  If you want GUARANTEED delivery to offline users without a separate        │
+│  timeline cache, you could use Kafka instead of Redis Pub/Sub:              │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                      │   │
+│  │  REDIS PUB/SUB (Our Approach)          KAFKA (Alternative)           │   │
+│  │  ─────────────────────────────         ──────────────────────────    │   │
+│  │                                                                      │   │
+│  │  • Fire-and-forget                     • Messages persisted to disk  │   │
+│  │  • Offline = message lost              • Offline = messages queue up │   │
+│  │  • Need separate timeline cache        • Kafka IS the timeline       │   │
+│  │  • Simple, low latency                 • More complex, higher latency│   │
+│  │  • No consumer offset tracking         • Track offset per user       │   │
+│  │                                                                      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  KAFKA APPROACH:                                                             │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  • Each user has a Kafka topic or partition: inbox-bob, inbox-carol        │
+│  • Messages persist until consumed                                          │
+│  • User comes online → consume from last offset                            │
+│  • No separate cache needed (Kafka is the store)                           │
+│                                                                              │
+│  WHEN TO USE KAFKA:                                                          │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  ✅ Critical messages that MUST be delivered (e.g., banking alerts)        │
+│  ✅ Need message replay/audit trail                                         │
+│  ✅ Want single source of truth (no separate cache)                        │
+│                                                                              │
+│  WHEN TO USE REDIS PUB/SUB:                                                  │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  ✅ Real-time notifications where missing one is okay                       │
+│  ✅ Already have a timeline cache (like social media feeds)                │
+│  ✅ Want simplicity and lowest latency                                      │
+│  ✅ Millions of users (Kafka topic-per-user doesn't scale well)            │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why Redis Pub/Sub is Perfect Here:**
+- **Fire-and-forget**: If no one is listening, message is dropped (no queue buildup)
+- **Decoupled**: Fan-out worker doesn't need to know which WebSocket server has which user
+- **Efficient**: No wasted network/CPU pushing to offline users
+- **Scalable**: Works with any number of WebSocket server instances
 
 ---
 
@@ -675,22 +1105,31 @@ CLIENT POLLING:
 ### Questions You Should Be Able to Answer
 
 #### CDC
-- [ ] "Why is CDC better than application-level events?"
-- [ ] "How does Debezium work under the hood?"
-- [ ] "What happens if the CDC connector goes down?"
-- [ ] "How do you handle schema changes with CDC?"
+
+| Question | One-Liner Answer |
+|----------|------------------|
+| "Why is CDC better than application-level events?" | CDC captures ALL changes (including direct DB writes, migrations, triggers) by tailing the WAL, while app events miss anything that bypasses application code. |
+| "How does Debezium work under the hood?" | Debezium connects to the database's WAL/binlog as a replication client, reads committed changes, and publishes them to Kafka topics. |
+| "What happens if the CDC connector goes down?" | Debezium stores its position (LSN/binlog offset) in Kafka; on restart, it resumes from the last committed position—no data loss if WAL hasn't been purged. |
+| "How do you handle schema changes with CDC?" | Use schema registry (e.g., Confluent Schema Registry) for schema evolution; Debezium can capture DDL changes and update schemas accordingly. |
 
 #### WebSocket/SSE
-- [ ] "When would you choose SSE over WebSocket?"
-- [ ] "How do you handle WebSocket reconnection?"
-- [ ] "How do you scale WebSocket servers?"
-- [ ] "What's the connection limit for SSE?"
+
+| Question | One-Liner Answer |
+|----------|------------------|
+| "When would you choose SSE over WebSocket?" | When you only need server→client push (notifications, feeds); SSE is simpler, auto-reconnects, and works better with HTTP/2 multiplexing. |
+| "How do you handle WebSocket reconnection?" | Implement client-side reconnection with exponential backoff, and use a "last event ID" to request missed messages from server on reconnect. |
+| "How do you scale WebSocket servers?" | Use sticky sessions (same user → same server) or Redis Pub/Sub to broadcast messages across all WebSocket server instances. |
+| "What's the connection limit for SSE?" | 6 connections per domain in HTTP/1.1 (browser limit); solved by HTTP/2 multiplexing or multiplexing multiple event types in one SSE stream. |
 
 #### Fan-out
-- [ ] "How would you handle a celebrity posting to 100M followers?"
-- [ ] "What's the difference between fan-out on read vs write?"
-- [ ] "How does the outbox pattern ensure no lost events?"
-- [ ] "How do you push updates only to online users?"
+
+| Question | One-Liner Answer |
+|----------|------------------|
+| "How would you handle a celebrity posting to 100M followers?" | Use fan-out on READ for celebrities: store post once, followers fetch from celebrity's timeline at read time instead of pre-computing. |
+| "What's the difference between fan-out on read vs write?" | Write: pre-compute and store in each follower's timeline (fast reads, slow writes). Read: compute timeline at read time (slow reads, fast writes). |
+| "How does the outbox pattern ensure no lost events?" | Events are written to an outbox table in the SAME transaction as the data change; a separate process reliably publishes them—no dual-write problem. |
+| "How do you push updates only to online users?" | Use Redis Pub/Sub: WebSocket servers subscribe to channels for connected users; fan-out worker publishes to user channels—offline users have no subscriber, message is dropped. |
 
 ### Architecture Diagram Reference
 
