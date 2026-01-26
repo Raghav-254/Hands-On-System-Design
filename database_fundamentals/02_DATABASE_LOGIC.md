@@ -56,9 +56,18 @@
 2. [NoSQL Indexing](#nosql-indexing-partition-key-clustering-key--secondary-indexes)
    - Partition Key vs Clustering Key
    - Secondary Indexes (Local & Global)
-3. [MVCC (Multi-Version Concurrency Control)](#2-mvcc-multi-version-concurrency-control)
-4. [Isolation Levels](#3-isolation-levels)
-5. [Interview Checklist](#4-interview-checklist)
+3. [Transactions & Concurrency Control](#2-transactions--concurrency-control)
+   - 2.1 What is a Transaction? (ACID)
+   - 2.2 Concurrency Anomalies
+   - 2.3 Locking (Database Mechanism)
+   - 2.4 MVCC (Multi-Version Concurrency Control)
+   - 2.5 Isolation Levels
+   - 2.6 How It All Ties Together ← Connect the concepts!
+   - 2.7 Pessimistic vs Optimistic Locking
+   - 2.8 Famous Concurrency Problems & Solutions ← Interview Gold!
+   - 2.9 SQL vs NoSQL: Transaction Support
+   - 2.10 Level 2 → Level 3 Connection
+4. [Interview Checklist](#3-interview-checklist)
 
 ---
 
@@ -904,423 +913,2514 @@ DESIGN RULES:
 
 ---
 
-## 2. MVCC (Multi-Version Concurrency Control)
+## 2. Transactions & Concurrency Control
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    📍 SCOPE: SINGLE-NODE FOCUS                               │
+│                    📖 THE STORY WE'RE TELLING                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  In this section, we cover MVCC on a SINGLE database server.                │
-│  This is the foundation you need to understand first.                       │
+│  This section follows a natural progression:                                │
 │                                                                              │
-│  WHAT WE COVER HERE (Level 2):                                              │
-│  • How one PostgreSQL/MySQL instance handles concurrent transactions        │
-│  • Transaction IDs, visibility rules, isolation levels                      │
-│  • Single-node: xmin/xmax, undo logs, snapshot isolation                    │
+│  1. WHAT IS A TRANSACTION? → The atomic unit of work                        │
+│  2. WHAT CAN GO WRONG? → Concurrency anomalies (reads AND writes)           │
+│  3. NAIVE SOLUTION → Locking everything (simple but slow)                   │
+│  4. CLEVER SOLUTION → MVCC (readers don't block writers)                    │
+│  5. TUNING KNOBS → Isolation levels (how much protection?)                  │
+│  6. CHOOSING STRATEGY → Pessimistic vs Optimistic locking                   │
 │                                                                              │
-│  WHAT COMES LATER (Level 3 - Distributed Systems):                          │
-│  • How to achieve consistent snapshots ACROSS multiple nodes                │
-│  • Global timestamp ordering (Hybrid Logical Clocks, TrueTime)              │
-│  • Distributed transactions (2PC, Saga pattern)                             │
-│  • Conflict resolution (Vector Clocks, CRDTs) when nodes diverge            │
-│                                                                              │
-│  CONNECTION:                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────────┐│
-│  │  Single-Node MVCC ──────► Distributed MVCC                              ││
-│  │  (This section)           (Level 3)                                     ││
-│  │                                                                         ││
-│  │  Same concept, but distributed adds:                                    ││
-│  │  • Global timestamps instead of local transaction IDs                   ││
-│  │  • Cross-node coordination (which node has latest version?)             ││
-│  │  • Conflict resolution when network partitions occur                    ││
-│  └─────────────────────────────────────────────────────────────────────────┘│
-│                                                                              │
-│  👉 Master single-node first, then distributed concepts build naturally.    │
+│  📍 SCOPE: Single-node concurrency                                          │
+│  📍 EXTENDS TO: Level 3 covers distributed transactions (2PC, Sagas)        │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### The Concurrency Problem
+---
+
+### 2.1 What is a Transaction?
+
+> **One-liner:** A transaction is an atomic unit of work where ALL operations succeed together or FAIL together—there's no partial state.
 
 ```
-PROBLEM: Read-Write Conflicts
-
-TIME    Writer                    Reader
-─────────────────────────────────────────────────
-T1      BEGIN                     
-T2      UPDATE users              
-        SET balance = 100         
-        WHERE id = 1              
-T3                                BEGIN
-T4                                SELECT balance 
-                                  FROM users 
-                                  WHERE id = 1
-                                  
-QUESTION: What does the reader see?
-• Old value (balance = 50)?
-• New value (balance = 100)?
-• Is the reader blocked?
-
-WITHOUT MVCC (Lock-based):
-• Reader is BLOCKED until writer commits/rolls back
-• This destroys read throughput
-
-WITH MVCC:
-• Reader sees OLD value (50) - consistent snapshot
-• Reader is NEVER blocked by writers
-• Writers are NEVER blocked by readers
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         TRANSACTION: THE ACID GUARANTEE                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO: Transfer $100 from Alice to Bob                                  │
+│                                                                              │
+│  BEGIN TRANSACTION;                                                         │
+│      UPDATE accounts SET balance = balance - 100 WHERE user = 'Alice';     │
+│      UPDATE accounts SET balance = balance + 100 WHERE user = 'Bob';       │
+│  COMMIT;                                                                     │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────── │
+│                                                                              │
+│  WITHOUT TRANSACTION (What could go wrong):                                 │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │  Step 1: Deduct $100 from Alice    ✓ (Alice: $900)                     │ │
+│  │  Step 2: 💥 CRASH / POWER FAILURE                                      │ │
+│  │  Step 3: Add $100 to Bob           ✗ (Never executed!)                 │ │
+│  │                                                                        │ │
+│  │  RESULT: $100 vanished into thin air! Alice lost money, Bob got nothing│ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  WITH TRANSACTION:                                                          │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │  Step 1: Deduct $100 from Alice    (logged to WAL, not yet committed)  │ │
+│  │  Step 2: 💥 CRASH                                                      │ │
+│  │  Step 3: On restart → ROLLBACK (Alice gets $100 back)                  │ │
+│  │                                                                        │ │
+│  │  RESULT: Either BOTH happen or NEITHER happens. Money is safe!         │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### How MVCC Works
+#### ACID Properties (Quick Reference)
+
+| Property | Meaning | Ensures |
+|----------|---------|---------|
+| **Atomicity** | All or nothing | No partial transactions |
+| **Consistency** | Valid state to valid state | Constraints always hold |
+| **Isolation** | Transactions don't interfere | Concurrent = sequential result |
+| **Durability** | Committed = permanent | Survives crashes |
+
+---
+
+#### What Happens When a Transaction Commits?
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      MVCC ARCHITECTURE                               │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  Every row has hidden system columns:                                │
-│                                                                      │
-│  PostgreSQL:                                                         │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  xmin   │  xmax   │  user_id  │  balance  │  email           │   │
-│  │  (100)  │  (102)  │    1      │    50     │  a@b.com         │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│     ▲          ▲                                                     │
-│     │          └── Transaction that deleted/updated this version     │
-│     └───────────── Transaction that created this version             │
-│                                                                      │
-│  MySQL InnoDB:                                                       │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │  DB_TRX_ID  │  DB_ROLL_PTR  │  user_id  │  balance  │ email  │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-│       ▲               ▲                                              │
-│       │               └── Pointer to undo log (previous versions)    │
-│       └────────────────── Transaction ID that modified this row      │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          COMMIT: BUFFER POOL vs DISK                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  QUESTION: "When I commit, does data go to disk or buffer pool?"            │
+│                                                                              │
+│  ANSWER: Both, but differently!                                             │
+│                                                                              │
+│  ON COMMIT:                                                                 │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  1. WAL (Write-Ahead Log) → FLUSHED TO DISK immediately ✓                  │
+│     This guarantees durability. If crash, WAL can replay.                  │
+│                                                                              │
+│  2. Data pages → STAY IN BUFFER POOL (as "dirty pages")                    │
+│     Written to disk LATER by background process.                           │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                    │    │
+│  │   COMMIT                                                           │    │
+│  │     │                                                              │    │
+│  │     ├──► WAL ──► DISK (immediate, synchronous)                    │    │
+│  │     │           Guarantees durability!                             │    │
+│  │     │                                                              │    │
+│  │     └──► Data Page ──► Buffer Pool ──► DISK (later, async)        │    │
+│  │                        (dirty page)    (checkpoint/bgwriter)       │    │
+│  │                                                                    │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  WHY? Performance!                                                          │
+│  • Disk writes are slow                                                    │
+│  • WAL is sequential (fast), data pages are random (slow)                  │
+│  • As long as WAL is on disk, data can be recovered                        │
+│                                                                              │
+│  (See Level 1: Storage Internals for more on WAL and Buffer Pool)          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### MVCC Read Path
+### 2.2 What Can Go Wrong? (Concurrency Anomalies)
+
+When multiple transactions run concurrently, bad things can happen. Let's categorize them:
 
 ```
-SCENARIO: Transaction 105 wants to read user_id = 1
-
-Current row versions in table:
-┌─────────────────────────────────────────────────────┐
-│  Version 1: xmin=100, xmax=102, balance=50          │ ← Old version
-│  Version 2: xmin=102, xmax=∞,   balance=75          │ ← Current
-└─────────────────────────────────────────────────────┘
-
-Transaction states:
-• TXN 100: Committed at timestamp T1
-• TXN 102: Committed at timestamp T3
-• TXN 105: Started at timestamp T2 (between T1 and T3)
-
-VISIBILITY CHECK for TXN 105:
-┌─────────────────────────────────────────────────────────────────────┐
-│ Is Version 2 visible to TXN 105?                                    │
-│                                                                      │
-│ 1. Was xmin (102) committed before TXN 105 started?                 │
-│    → NO, TXN 102 committed at T3, but TXN 105 started at T2         │
-│    → Version 2 is INVISIBLE to TXN 105                              │
-│                                                                      │
-│ Is Version 1 visible to TXN 105?                                    │
-│                                                                      │
-│ 1. Was xmin (100) committed before TXN 105 started?                 │
-│    → YES, TXN 100 committed at T1                                   │
-│ 2. Is xmax (102) still active or committed after TXN 105 started?   │
-│    → TXN 102 wasn't committed when 105 started                      │
-│    → Version 1 is VISIBLE to TXN 105                                │
-│                                                                      │
-│ RESULT: TXN 105 sees balance = 50 (the old version!)                │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### PostgreSQL vs MySQL MVCC
-
-| Aspect | PostgreSQL | MySQL InnoDB |
-|--------|------------|--------------|
-| **Old versions stored** | In main table (heap) | In undo log (separate) |
-| **Version chain** | Multiple tuples in heap | Rollback pointer chain |
-| **Cleanup** | VACUUM process | Purge thread |
-| **Index handling** | Index points to all versions | Index points to latest |
-| **Bloat risk** | Higher (dead tuples) | Lower |
-| **VACUUM needed** | Yes, critical | No |
-
-### The VACUUM Problem (PostgreSQL)
-
-```
-PostgreSQL MVCC creates "dead tuples":
-
-TIME    Operation               Heap State
-─────────────────────────────────────────────────────────────
-T1      INSERT id=1             [id:1, xmin:100, xmax:∞]
-T2      UPDATE id=1             [id:1, xmin:100, xmax:101] ← Dead
-                                [id:1, xmin:101, xmax:∞]  ← Live
-T3      UPDATE id=1             [id:1, xmin:100, xmax:101] ← Dead
-                                [id:1, xmin:101, xmax:102] ← Dead  
-                                [id:1, xmin:102, xmax:∞]  ← Live
-
-PROBLEM: Dead tuples waste space and slow down scans!
-
-SOLUTION: VACUUM
-• Marks dead tuple space as reusable
-• VACUUM FULL: Rewrites table (locks table!)
-• autovacuum: Background process (tune it!)
-
-INTERVIEW TIP: "PostgreSQL requires VACUUM tuning for write-heavy
-workloads to prevent table bloat."
-```
-
-### MVCC Benefits
-
-```
-1. READERS NEVER BLOCK WRITERS
-   • SELECT doesn't acquire locks that block INSERT/UPDATE
-   • Perfect for read-heavy OLTP workloads
-
-2. WRITERS NEVER BLOCK READERS  
-   • UPDATE doesn't block SELECT
-   • No read latency spikes during writes
-
-3. CONSISTENT SNAPSHOTS
-   • Reader sees database as of transaction start
-   • No "torn reads" or inconsistent data
-
-4. NO LOCK WAITS FOR READS
-   • Reads always succeed immediately
-   • Huge throughput improvement vs lock-based
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        CONCURRENCY ANOMALIES                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  READ ANOMALIES (Problems when READING data):                               │
+│  ────────────────────────────────────────────                               │
+│  • Dirty Read       → Read uncommitted data (might be rolled back!)        │
+│  • Non-Repeatable   → Same query, different result (row was modified)      │
+│  • Phantom Read     → New rows appear matching your query criteria         │
+│                                                                              │
+│  WRITE ANOMALIES (Problems when WRITING data):                              │
+│  ─────────────────────────────────────────────                              │
+│  • Dirty Write      → Overwrite another transaction's uncommitted write    │
+│  • Lost Update      → Two writes, one silently overwrites the other        │
+│  • Write Skew       → Two transactions make conflicting decisions          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Isolation Levels
+#### READ ANOMALY 1: Dirty Read
 
-### The Isolation Spectrum
-
-```
-WEAKER                                                      STRONGER
-(Faster)                                                    (Slower)
-   │                                                            │
-   ▼                                                            ▼
-┌──────────┐  ┌────────────────┐  ┌─────────────────┐  ┌───────────────┐
-│READ      │  │READ            │  │REPEATABLE       │  │SERIALIZABLE   │
-│UNCOMMITTED│  │COMMITTED       │  │READ             │  │               │
-└──────────┘  └────────────────┘  └─────────────────┘  └───────────────┘
-     │               │                    │                    │
-     │               │                    │                    │
-  Dirty           Dirty               Dirty                Dirty
-  Reads           Reads               Reads                Reads
-  Possible        PREVENTED           PREVENTED            PREVENTED
-                                                           
-  Non-Rep         Non-Rep             Non-Rep              Non-Rep
-  Reads           Reads               Reads                Reads
-  Possible        Possible            PREVENTED            PREVENTED
-                                                           
-  Phantom         Phantom             Phantom              Phantom
-  Reads           Reads               Reads                Reads
-  Possible        Possible            Possible*            PREVENTED
-                                                           
-                                      * Depends on DB
-```
-
-### The Anomalies Explained
-
-#### Dirty Read
+> **Problem:** Reading uncommitted data that might be rolled back.
 
 ```
-DIRTY READ: Reading uncommitted data from another transaction
-
-TXN A                           TXN B
-──────────────────────────────────────────
-BEGIN
-UPDATE accounts 
-SET balance = 100 
-WHERE id = 1
-(balance was 50)
-                                BEGIN
-                                SELECT balance FROM accounts
-                                WHERE id = 1
-                                → Returns 100 (uncommitted!)
-ROLLBACK
-(balance is back to 50)
-                                -- TXN B made decisions based on 
-                                -- data that never existed!
-
-PREVENTED BY: Read Committed and above
-```
-
-#### Non-Repeatable Read
-
-```
-NON-REPEATABLE READ: Same query returns different results in same transaction
-
-TXN A                           TXN B
-──────────────────────────────────────────
-BEGIN
-SELECT balance FROM accounts
-WHERE id = 1
-→ Returns 50
-                                BEGIN
-                                UPDATE accounts 
-                                SET balance = 100 
-                                WHERE id = 1
-                                COMMIT
-SELECT balance FROM accounts
-WHERE id = 1
-→ Returns 100 (different!)
-
--- Same query, same transaction, different result!
-
-PREVENTED BY: Repeatable Read and above
-```
-
-#### Phantom Read
-
-```
-PHANTOM READ: New rows appear that match a previous query's criteria
-
-TXN A                           TXN B
-──────────────────────────────────────────
-BEGIN
-SELECT COUNT(*) FROM orders
-WHERE status = 'pending'
-→ Returns 5
-                                BEGIN
-                                INSERT INTO orders 
-                                (status) VALUES ('pending')
-                                COMMIT
-SELECT COUNT(*) FROM orders
-WHERE status = 'pending'
-→ Returns 6 (phantom row appeared!)
-
-PREVENTED BY: Serializable
-(PostgreSQL's Repeatable Read also prevents this)
-```
-
-#### Write Skew (The Tricky One!)
-
-```
-WRITE SKEW: Two transactions read same data, make decisions, 
-            write different rows, result violates constraint
-
-SCENARIO: On-call system, at least 1 doctor must be on-call
-
-CONSTRAINT: COUNT(*) WHERE on_call = true >= 1
-
-Current state: Alice and Bob are both on-call
-
-TXN A (Alice wants off)         TXN B (Bob wants off)
-──────────────────────────────────────────────────────
-BEGIN                           BEGIN
-SELECT COUNT(*) FROM doctors
-WHERE on_call = true
-→ Returns 2 (safe to leave!)
-                                SELECT COUNT(*) FROM doctors
-                                WHERE on_call = true
-                                → Returns 2 (safe to leave!)
-UPDATE doctors 
-SET on_call = false 
-WHERE name = 'Alice'
-                                UPDATE doctors 
-                                SET on_call = false 
-                                WHERE name = 'Bob'
-COMMIT                          COMMIT
-
-RESULT: BOTH doctors are off-call! Constraint violated!
-
-WHY IT HAPPENED:
-• Each transaction read the same data
-• Each made a decision based on that data
-• Each wrote to DIFFERENT rows
-• No conflict detected because no row was modified by both
-
-PREVENTED BY: Serializable (via conflict detection or locking)
-WORKAROUND: SELECT ... FOR UPDATE (explicit locking)
-```
-
-### Isolation Level Implementations
-
-| Database | Default Level | Repeatable Read Behavior |
-|----------|---------------|-------------------------|
-| PostgreSQL | Read Committed | Prevents phantoms (Snapshot Isolation) |
-| MySQL InnoDB | Repeatable Read | Gap locking prevents phantoms |
-| Oracle | Read Committed | Only has Read Committed and Serializable |
-| SQL Server | Read Committed | Has full spectrum |
-
-### PostgreSQL Snapshot Isolation
-
-```
-PostgreSQL's "Repeatable Read" is actually Snapshot Isolation:
-
-1. At transaction start, take a "snapshot" of all committed transactions
-2. Throughout the transaction, only see data from that snapshot
-3. If two transactions modify the same row → first committer wins,
-   second gets "could not serialize" error
-
-BENEFIT: Prevents phantoms (unlike standard SQL Repeatable Read)
-DOWNSIDE: Write skew is still possible (need Serializable for that)
-```
-
-### MySQL Gap Locking
-
-```
-MySQL's approach to preventing phantoms at Repeatable Read:
-
-GAP LOCK: Lock the "gap" between index entries
-
-Index entries: [10, 20, 30, 40, 50]
-
-Query: SELECT * FROM t WHERE id > 25 AND id < 45 FOR UPDATE
-
-Locks acquired:
-• Record lock on 30
-• Record lock on 40  
-• Gap lock on (20, 30) - prevents inserts between 20 and 30
-• Gap lock on (30, 40) - prevents inserts between 30 and 40
-• Gap lock on (40, 50) - prevents inserts between 40 and 50
-
-DOWNSIDE: Can cause deadlocks in high-concurrency scenarios
-```
-
-### Choosing the Right Isolation Level
-
-```
-READ COMMITTED (Default for many):
-├── Best for: General OLTP workloads
-├── Allows: Non-repeatable reads (usually acceptable)
-├── Trade-off: Fastest, fewest locks/conflicts
-└── Use when: Individual query consistency is enough
-
-REPEATABLE READ:
-├── Best for: Reports, multi-query transactions
-├── Allows: Write skew (be aware!)
-├── Trade-off: More memory (maintain snapshot)
-└── Use when: Transaction must see consistent data throughout
-
-SERIALIZABLE:
-├── Best for: Financial transactions, constraint enforcement
-├── Allows: Nothing (fully isolated)
-├── Trade-off: Slowest, most conflicts/retries
-└── Use when: Correctness is paramount
-
-INTERVIEW TIP: "We use Read Committed for most operations but 
-Serializable for financial transfers to prevent write skew."
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              DIRTY READ                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  TXN A (Writer)                       TXN B (Reader)                        │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  BEGIN                                                                      │
+│  UPDATE accounts                                                            │
+│  SET balance = 100                                                          │
+│  WHERE id = 1                                                               │
+│  (balance was 50, now 100 in-flight)                                        │
+│                                        BEGIN                                │
+│                                        SELECT balance FROM accounts         │
+│                                        WHERE id = 1                         │
+│                                        → Returns 100 ← UNCOMMITTED DATA!   │
+│  ROLLBACK ← Changed my mind!                                                │
+│  (balance is back to 50)                                                    │
+│                                        -- TXN B made decisions based on    │
+│                                        -- data that NEVER EXISTED!          │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  REAL-WORLD IMPACT:                                                         │
+│  • TXN B might approve a loan based on a $100 balance that was rolled back │
+│  • Inventory system thinks item exists, but insert was rolled back         │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  PREVENTION: Read Committed isolation or higher (→ See Section 2.5)        │
+│              MVCC ensures you only see committed data (→ See Section 2.4)  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 4. Interview Checklist
+#### READ ANOMALY 2: Non-Repeatable Read
+
+> **Problem:** Same query returns different results within the same transaction.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          NON-REPEATABLE READ                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  TXN A (Reader)                       TXN B (Writer)                        │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  BEGIN                                                                      │
+│  SELECT balance FROM accounts                                               │
+│  WHERE id = 1                                                               │
+│  → Returns 50                                                               │
+│                                        BEGIN                                │
+│                                        UPDATE accounts                      │
+│                                        SET balance = 100                    │
+│                                        WHERE id = 1                         │
+│                                        COMMIT ✓                             │
+│  -- Later in SAME transaction:                                              │
+│  SELECT balance FROM accounts                                               │
+│  WHERE id = 1                                                               │
+│  → Returns 100 ← DIFFERENT!                                                 │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  WHY IT'S BAD:                                                              │
+│  • Report shows inconsistent totals (read balance twice, got different)    │
+│  • Business logic assumed balance = 50, but later sees 100                 │
+│  • "Within my transaction, the world should appear frozen"                 │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  PREVENTION: Repeatable Read isolation or higher (→ See Section 2.5)       │
+│              MVCC snapshot keeps your view frozen (→ See Section 2.4)      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### READ ANOMALY 3: Phantom Read
+
+> **Problem:** New rows appear that match a previous query's criteria, causing decisions made earlier in the transaction to become invalid.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            PHANTOM READ                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO: Flight booking - max 10 seats per flight                         │
+│                                                                              │
+│  TXN A                                TXN B                                 │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  BEGIN                                                                      │
+│  SELECT COUNT(*) FROM bookings                                              │
+│  WHERE flight_id = 'ABC123'                                                 │
+│  → Returns 9 (one seat left!)                                               │
+│                                                                              │
+│  -- Decision: OK, I can book one more...                                    │
+│                                                                              │
+│                                        BEGIN                                │
+│                                        SELECT COUNT(*) FROM bookings        │
+│                                        WHERE flight_id = 'ABC123'           │
+│                                        → Returns 9 (one seat left!)         │
+│                                                                              │
+│                                        INSERT INTO bookings                 │
+│                                        (flight_id, passenger)               │
+│                                        VALUES ('ABC123', 'Bob')             │
+│                                        COMMIT ✓ (now 10 seats)              │
+│                                                                              │
+│  -- Still think there's 1 seat left (based on old count)...                │
+│  INSERT INTO bookings                                                       │
+│  (flight_id, passenger)                                                     │
+│  VALUES ('ABC123', 'Alice')                                                 │
+│  COMMIT ✓                                                                   │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  RESULT: Flight has 11 bookings! OVERBOOKING!                               │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  WHY IT'S A PROBLEM:                                                        │
+│  • TXN A made a DECISION based on the count (9 seats → 1 left)             │
+│  • A new row was INSERTED that matches the same WHERE clause               │
+│  • TXN A's decision is now INVALID, but it doesn't know!                   │
+│  • Result: Business constraint violated                                     │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  WHEN PHANTOMS ARE OK vs PROBLEMATIC:                                       │
+│                                                                              │
+│  ✅ OK: Displaying a list (user refreshes → sees new data, fine!)          │
+│  ❌ BAD: Making decisions based on counts or aggregates                    │
+│  ❌ BAD: Reports that must be internally consistent                        │
+│  ❌ BAD: Constraint checking (max items, unique usernames, etc.)           │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  DIFFERENCE FROM NON-REPEATABLE READ:                                       │
+│  • Non-Repeatable: EXISTING row was MODIFIED                               │
+│  • Phantom: NEW row was INSERTED that matches your WHERE clause            │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  PREVENTION:                                                                │
+│  • Serializable isolation (→ See Section 2.5)                              │
+│  • PostgreSQL Repeatable Read also prevents (uses snapshot isolation)      │
+│  • MySQL uses gap locking at Repeatable Read (→ See Section 2.5)           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### WRITE ANOMALY 0: Dirty Write (Most Fundamental!)
+
+> **Problem:** One transaction overwrites data that another uncommitted transaction has already written.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            DIRTY WRITE                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO: Two transactions updating the same row concurrently              │
+│                                                                              │
+│  TXN A                                TXN B                                 │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  BEGIN                                                                      │
+│  UPDATE accounts                                                            │
+│  SET balance = 100                                                          │
+│  WHERE id = 1                                                               │
+│  (uncommitted!)                                                             │
+│                                        BEGIN                                │
+│                                        UPDATE accounts                      │
+│                                        SET balance = 200                    │
+│                                        WHERE id = 1                         │
+│                                        (overwrites uncommitted value!)      │
+│                                        COMMIT ✓                             │
+│  ROLLBACK ← TXN A aborts!                                                   │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  QUESTION: What is the balance now?                                         │
+│                                                                              │
+│  • TXN B committed balance = 200                                            │
+│  • But TXN A rolled back... should balance go back to original?             │
+│  • TXN B's commit was based on overwriting TXN A's uncommitted write!       │
+│  • DATABASE IS NOW IN INCONSISTENT STATE!                                   │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  REAL-WORLD EXAMPLE: Ordering System                                        │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  Two tables: orders, invoices (linked by order_id)                         │
+│                                                                              │
+│  TXN A: Insert order 123, insert invoice for order 123                     │
+│  TXN B: Insert order 456, insert invoice for order 456                     │
+│                                                                              │
+│  WITH DIRTY WRITES:                                                         │
+│  TXN A: Insert order 123                                                   │
+│  TXN B: Overwrites with order 456 (dirty write!)                           │
+│  TXN A: Insert invoice for "order 123"                                     │
+│  TXN B: Insert invoice for "order 456"                                     │
+│                                                                              │
+│  RESULT: Invoice points to wrong order! Data corruption!                   │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  HOW DATABASES PREVENT THIS:                                                │
+│                                                                              │
+│  ALL databases prevent dirty writes by default—even Read Uncommitted!      │
+│  • Writers acquire exclusive (X) locks before modifying                    │
+│  • Another writer must WAIT until first writer commits/rollbacks           │
+│  • This is so fundamental, it's not even listed as an isolation concern    │
+│                                                                              │
+│  PREVENTED BY: All isolation levels (via write locks)                       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### WRITE ANOMALY 1: Lost Update (CRITICAL!)
+
+> **Problem:** Two transactions read the same value, both modify it, one overwrites the other's change.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           LOST UPDATE                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO: Two users increment a counter (counter = 10)                     │
+│                                                                              │
+│  TXN A                                TXN B                                 │
+│  ────────────────────────────────────────────────────────3───────────────    │
+│  BEGIN                                BEGIN                                 │
+│  SELECT counter FROM t                                                      │
+│  → Returns 10                                                               │
+│                                        SELECT counter FROM t                │
+│                                        → Returns 10                         │
+│  -- Application: newVal = 10 + 1                                            │
+│  UPDATE t SET counter = 11                                                  │
+│                                        -- Application: newVal = 10 + 1      │
+│                                        UPDATE t SET counter = 11           │
+│  COMMIT ✓                              COMMIT ✓                             │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  EXPECTED: counter = 12 (incremented twice)                                 │
+│  ACTUAL:   counter = 11 ← TXN A's update was LOST!                          │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  REAL-WORLD EXAMPLES:                                                       │
+│  • Two users edit same document, one's changes disappear                   │
+│  • Inventory decremented twice, but only one decrement recorded            │
+│  • Two payments processed, one payment lost                                │
+│  • Like count: 1000 users click "like", only 800 recorded                  │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  PREVENTION:                                                                │
+│  • Atomic operations: UPDATE t SET counter = counter + 1 (→ See below)     │
+│  • Pessimistic locking: SELECT ... FOR UPDATE (→ See Section 2.6)          │
+│  • Optimistic locking: Version column + retry (→ See Section 2.6)          │
+│  • Serializable isolation for complex cases (→ See Section 2.5)            │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### The Root Cause: Read-Modify-Write is NOT Atomic
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   READ-MODIFY-WRITE PATTERN                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  THE PATTERN THAT CAUSES LOST UPDATES:                                      │
+│  ─────────────────────────────────────                                      │
+│                                                                              │
+│     ┌─────────┐      ┌─────────┐      ┌─────────┐                           │
+│     │  READ   │ ───► │ MODIFY  │ ───► │  WRITE  │                           │
+│     │ counter │      │ +1 in   │      │ counter │                           │
+│     │ from DB │      │ app code│      │ to DB   │                           │
+│     └─────────┘      └─────────┘      └─────────┘                           │
+│          │                                  │                               │
+│          └──────── GAP WHERE OTHERS ────────┘                               │
+│                    CAN INTERFERE                                            │
+│                                                                              │
+│  THE PROBLEM:                                                               │
+│  • Read (SELECT counter) → value goes to application                       │
+│  • Modify (newVal = counter + 1) → happens in application memory           │
+│  • Write (UPDATE counter = newVal) → value goes back to database           │
+│                                                                              │
+│  Between READ and WRITE, another transaction can sneak in!                  │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTIONS:                                                                 │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 1: Atomic Database Operation (BEST when possible)                 │
+│  ───────────────────────────────────────────────────────────                │
+│  Instead of:                                                                │
+│    val = SELECT counter FROM t;                                             │
+│    UPDATE t SET counter = val + 1;                                          │
+│                                                                              │
+│  Do this:                                                                   │
+│    UPDATE t SET counter = counter + 1;   ← Database handles atomically!    │
+│                                                                              │
+│  Works for: Increment, decrement, append, simple arithmetic                │
+│  Doesn't work for: Complex business logic between read and write           │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 2: Pessimistic Locking (SELECT ... FOR UPDATE)                    │
+│  ────────────────────────────────────────────────────────                   │
+│  SELECT counter FROM t WHERE id = 1 FOR UPDATE;  ← Lock the row            │
+│  -- do complex business logic --                                            │
+│  UPDATE t SET counter = newVal WHERE id = 1;                                │
+│  COMMIT;                                         ← Release lock             │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 3: Optimistic Locking (Version check)                             │
+│  ───────────────────────────────────────────────                            │
+│  SELECT counter, version FROM t WHERE id = 1;                               │
+│  -- do complex business logic --                                            │
+│  UPDATE t SET counter = newVal, version = version + 1                       │
+│  WHERE id = 1 AND version = oldVersion;  ← Fails if version changed!       │
+│  -- If 0 rows affected, retry from beginning                               │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 4: Compare-And-Swap (CAS) - Common in NoSQL                       │
+│  ─────────────────────────────────────────────────────                      │
+│  Same as optimistic locking, but often built into the database:            │
+│  • Redis: WATCH + MULTI/EXEC                                               │
+│  • DynamoDB: ConditionExpression                                           │
+│  • Cassandra: IF column = expected_value (Lightweight Transactions)        │
+│                                                                              │
+│  DynamoDB Example:                                                          │
+│    UpdateItem(                                                              │
+│      Key: {id: 1},                                                          │
+│      UpdateExpression: "SET counter = counter + 1",                         │
+│      ConditionExpression: "counter = :expected",                            │
+│      ExpressionAttributeValues: {":expected": 10}                           │
+│    )                                                                         │
+│    → Fails if counter ≠ 10                                                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### WRITE ANOMALY 2: Write Skew
+
+> **Problem:** Two transactions make decisions based on overlapping reads, write to different rows, together violate a constraint.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            WRITE SKEW                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO: Hospital on-call system                                          │
+│  CONSTRAINT: At least 1 doctor must be on-call at all times                │
+│  CURRENT STATE: Alice and Bob are both on-call                              │
+│                                                                              │
+│  TXN A (Alice wants off)              TXN B (Bob wants off)                 │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  BEGIN                                BEGIN                                 │
+│  SELECT COUNT(*) FROM doctors                                               │
+│  WHERE on_call = true                                                       │
+│  → Returns 2 (safe to leave!)                                               │
+│                                        SELECT COUNT(*) FROM doctors         │
+│                                        WHERE on_call = true                 │
+│                                        → Returns 2 (safe to leave!)         │
+│  UPDATE doctors                                                             │
+│  SET on_call = false                                                        │
+│  WHERE name = 'Alice'                                                       │
+│                                        UPDATE doctors                       │
+│                                        SET on_call = false                  │
+│                                        WHERE name = 'Bob'                   │
+│  COMMIT ✓                              COMMIT ✓                             │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  RESULT: BOTH doctors are off-call! CONSTRAINT VIOLATED!                    │
+│                                                                              │
+│  WHY IT'S TRICKY:                                                           │
+│  • Each transaction was individually correct                               │
+│  • They read the SAME data, wrote DIFFERENT rows                           │
+│  • No row was modified by both → no conflict detected!                     │
+│  • Database can't see the application-level constraint                     │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  OTHER EXAMPLES:                                                            │
+│  • Double-booking: Two users book "last seat" simultaneously               │
+│  • Budget: Two departments spend "remaining budget" at same time           │
+│  • Username: Two users claim same username (check-then-insert)             │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  PREVENTION:                                                                │
+│  • Serializable isolation - ONLY this level prevents write skew!           │
+│    (→ See Section 2.5)                                                     │
+│  • Explicit locking: SELECT ... FOR UPDATE on the rows you're checking    │
+│    (→ See Section 2.6)                                                     │
+│  • Database constraints (UNIQUE, CHECK) when possible                      │
+│                                                                              │
+│  ⚠️  Repeatable Read does NOT prevent write skew!                           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Summary: All Concurrency Anomalies
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ANOMALY QUICK REFERENCE                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ANOMALY              │ WHAT HAPPENS                │ CLASSIC EXAMPLE        │
+│  ─────────────────────┼─────────────────────────────┼────────────────────── │
+│  Dirty Write          │ Overwrite uncommitted data  │ Order/invoice mismatch │
+│                       │                             │ after rollback         │
+│  ─────────────────────┼─────────────────────────────┼────────────────────── │
+│  Dirty Read           │ Read uncommitted data       │ See balance that       │
+│                       │                             │ gets rolled back       │
+│  ─────────────────────┼─────────────────────────────┼────────────────────── │
+│  Non-Repeatable Read  │ Row changes between reads   │ Report shows           │
+│                       │                             │ inconsistent totals    │
+│  ─────────────────────┼─────────────────────────────┼────────────────────── │
+│  Phantom Read         │ New rows appear in query    │ Count changes          │
+│                       │                             │ mid-transaction        │
+│  ─────────────────────┼─────────────────────────────┼────────────────────── │
+│  Lost Update          │ One write overwrites        │ Counter incremented    │
+│                       │ another's write             │ twice, +1 instead of +2│
+│  ─────────────────────┼─────────────────────────────┼────────────────────── │
+│  Write Skew           │ Decisions on same data,     │ Both doctors go        │
+│                       │ write different rows        │ off-call               │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  NOTE: Lost Update, Phantom, and Write Skew are all "check-then-act" races. │
+│  The difference is WHAT changes: same row (Lost Update), new rows inserted  │
+│  (Phantom), or different related rows (Write Skew).                         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2.3 The Naive Solution: Locking
+
+> **Idea:** Before accessing data, acquire a lock. Other transactions must wait.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         LOCK-BASED CONCURRENCY                               │
+│                    "Assume conflicts WILL happen, prevent them"             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  LOCK TYPES:                                                                │
+│  ───────────────────────────────────────────────────────────────────────    │
+│                                                                              │
+│  SHARED LOCK (S-Lock / Read Lock):                                          │
+│  • Multiple transactions can hold S-lock on same row simultaneously        │
+│  • Used for: SELECT (reading)                                              │
+│  • Prevents: Others from writing while you're reading                      │
+│                                                                              │
+│  EXCLUSIVE LOCK (X-Lock / Write Lock):                                      │
+│  • Only ONE transaction can hold X-lock on a row                           │
+│  • Used for: UPDATE, DELETE, INSERT                                        │
+│  • Prevents: Others from reading OR writing                                │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  LOCK COMPATIBILITY MATRIX:                                                 │
+│  ┌─────────────────┬──────────────┬──────────────┐                          │
+│  │ Requested \Held │   S-Lock     │   X-Lock     │                          │
+│  ├─────────────────┼──────────────┼──────────────┤                          │
+│  │   S-Lock        │   ✅ GRANT    │   ❌ WAIT     │                          │
+│  │   X-Lock        │   ❌ WAIT     │   ❌ WAIT     │                          │
+│  └─────────────────┴──────────────┴──────────────┘                          │
+│                                                                              │
+│  READ: Multiple readers OK                                                  │
+│  WRITE: Writer is alone (no readers, no other writers)                      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### How Locking Prevents Lost Update
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│               LOCKING PREVENTS LOST UPDATE                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WITH LOCKS (SELECT ... FOR UPDATE):                                        │
+│                                                                              │
+│  TXN A                                TXN B                                 │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  BEGIN                                BEGIN                                 │
+│  SELECT counter FROM t                                                      │
+│  FOR UPDATE  ← Acquire X-lock!                                              │
+│  → Returns 10                                                               │
+│  (holds X-lock on row)                                                      │
+│                                        SELECT counter FROM t                │
+│                                        FOR UPDATE                           │
+│                                        → ⏳ BLOCKED! Waiting for X-lock...  │
+│  UPDATE t SET counter = 11                                                  │
+│  COMMIT ✓                                                                   │
+│  (releases X-lock)                                                          │
+│                                        → Lock acquired! Returns 11          │
+│                                        UPDATE t SET counter = 12           │
+│                                        COMMIT ✓                             │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  RESULT: counter = 12 ✅ (Both increments applied!)                         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Lock Granularity
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        LOCK GRANULARITY                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  FINE-GRAINED ◄─────────────────────────────────────► COARSE-GRAINED        │
+│                                                                              │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐              │
+│  │   ROW    │    │   PAGE   │    │  TABLE   │    │ DATABASE │              │
+│  │   LOCK   │    │   LOCK   │    │   LOCK   │    │   LOCK   │              │
+│  └──────────┘    └──────────┘    └──────────┘    └──────────┘              │
+│       ▲                                                  ▲                  │
+│       │                                                  │                  │
+│  High concurrency                                   Low concurrency         │
+│  High overhead                                      Low overhead            │
+│  (track many locks)                                 (one lock)              │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  MOST DATABASES USE: Row-level locking (best balance)                       │
+│  EXCEPTION: Some operations escalate to table locks if too many row locks  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### The Problem with Pure Locking: Readers Block Writers!
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    WHY PURE LOCKING IS SLOW                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO: E-commerce product page                                          │
+│  • 1000 users viewing product (readers)                                     │
+│  • 1 admin updating price (writer)                                          │
+│                                                                              │
+│  WITH PURE S-LOCK / X-LOCK:                                                 │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  Reader 1: SELECT * FROM products    → Holds S-lock                        │
+│  Reader 2: SELECT * FROM products    → Holds S-lock                        │
+│  Reader 3: SELECT * FROM products    → Holds S-lock                        │
+│  ...                                                                        │
+│  Reader 1000: SELECT * FROM products → Holds S-lock                        │
+│                                                                              │
+│  Admin: UPDATE products SET price = 99                                      │
+│         → ⏳ BLOCKED! Waiting for ALL 1000 S-locks to release!              │
+│                                                                              │
+│  New Reader: SELECT * FROM products                                         │
+│              → ⏳ BLOCKED! Can't get S-lock while X-lock is waiting!        │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  RESULT:                                                                    │
+│  • Writes starve waiting for reads to finish                               │
+│  • New reads queue behind pending writes                                   │
+│  • Everything slows to a crawl                                             │
+│  • Throughput collapses under concurrent load                              │
+│                                                                              │
+│  💡 THIS IS WHY WE NEED MVCC!                                               │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Two-Phase Locking (2PL)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      TWO-PHASE LOCKING (2PL)                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  PROBLEM: If you release a lock too early, others can sneak in!            │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  BAD EXAMPLE (Release lock early):                                          │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  TXN A                                TXN B                                 │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  BEGIN                                                                      │
+│  Lock(X), Read X = 100                                                      │
+│  Unlock(X)  ← Released too early!                                           │
+│                                        BEGIN                                │
+│                                        Lock(X), Read X = 100                │
+│                                        Lock(Y), Read Y = 50                 │
+│                                        Write Y = 150                        │
+│                                        Unlock(X), Unlock(Y), COMMIT         │
+│  Lock(Y), Read Y = 150   ← Sees Y AFTER B changed it!                      │
+│  Write X = 200                                                              │
+│  Unlock(Y), COMMIT                                                          │
+│                                                                              │
+│  RESULT: Non-serializable!                                                  │
+│  • TXN A saw X BEFORE B's changes (X = 100)                                │
+│  • TXN A saw Y AFTER B's changes (Y = 150)                                 │
+│  • This couldn't happen if they ran one-at-a-time!                         │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION: 2PL RULE                                                         │
+│  Once you release ANY lock, you can't acquire NEW locks                    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                     │   │
+│  │   Number of locks held                                              │   │
+│  │         ▲                                                           │   │
+│  │         │     ╱╲                                                    │   │
+│  │         │    ╱  ╲                                                   │   │
+│  │         │   ╱    ╲                                                  │   │
+│  │         │  ╱      ╲                                                 │   │
+│  │         │ ╱        ╲                                                │   │
+│  │         │╱          ╲                                               │   │
+│  │  ───────┴────────────┴──────────────────────────────────► Time     │   │
+│  │         │ GROWING    │ SHRINKING                                    │   │
+│  │         │  PHASE     │   PHASE                                      │   │
+│  │         │ (acquire)  │  (release)                                   │   │
+│  │         │ Can't      │  Can't                                       │   │
+│  │         │ release    │  acquire                                     │   │
+│  │                      │                                              │   │
+│  │               LOCK POINT (all locks held here)                      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  WHY THIS WORKS:                                                            │
+│  • At lock point, you hold ALL locks you'll ever need                      │
+│  • No one can sneak in between your operations                             │
+│  • Transactions appear to run in some serial order = SERIALIZABLE          │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  TRADE-OFFS:                                                                │
+│  • Hold locks longer → more blocking (readers/writers wait)                │
+│  • Can cause deadlocks (two transactions waiting for each other)           │
+│  • 💡 This is why MVCC was invented! (→ See Section 2.4)                   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Deadlocks
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            DEADLOCK                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  TXN A                                TXN B                                 │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  BEGIN                                BEGIN                                 │
+│  LOCK row 1 ✓                                                               │
+│                                        LOCK row 2 ✓                         │
+│  LOCK row 2                                                                 │
+│  → ⏳ Waiting for TXN B...                                                  │
+│                                        LOCK row 1                           │
+│                                        → ⏳ Waiting for TXN A...            │
+│                                                                              │
+│     ┌───────────────────────────────────────────────────────────────┐       │
+│     │                                                               │       │
+│     │   TXN A ──waits for──► row 2 ◄──held by── TXN B              │       │
+│     │     ▲                                        │               │       │
+│     │     │                                        │               │       │
+│     │   holds                                    waits for         │       │
+│     │     │                                        │               │       │
+│     │     ▼                                        ▼               │       │
+│     │   row 1 ◄──────────── waits for ──────────────               │       │
+│     │                                                               │       │
+│     │              CIRCULAR WAIT = DEADLOCK!                        │       │
+│     │                                                               │       │
+│     └───────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+│  RESOLUTION:                                                                │
+│  • Database detects cycle, aborts one transaction (victim)                 │
+│  • Application should retry the aborted transaction                        │
+│                                                                              │
+│  PREVENTION:                                                                │
+│  • Lock resources in consistent order                                      │
+│  • Use timeouts                                                            │
+│  • Keep transactions short                                                 │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2.4 The Clever Solution: MVCC (Multi-Version Concurrency Control)
+
+> **Key Insight:** Instead of blocking readers, keep multiple versions of each row. Readers see a consistent snapshot; writers create new versions.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         MVCC: THE BIG IDEA                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  PURE LOCKING:                          MVCC:                               │
+│  ─────────────                          ─────                               │
+│  "One copy of data,                     "Multiple versions of data,         │
+│   block when conflicts"                  readers see old version"           │
+│                                                                              │
+│  ┌─────────────────────┐               ┌─────────────────────────────┐     │
+│  │ Row: balance = 100  │               │ Version 1: balance = 100    │     │
+│  │                     │               │ (created by TXN 50)         │     │
+│  │ Reader: ⏳ WAIT      │               │                             │     │
+│  │ Writer: ✍️ WRITING   │               │ Version 2: balance = 150    │     │
+│  └─────────────────────┘               │ (created by TXN 60)         │     │
+│                                        └─────────────────────────────┘     │
+│                                                                              │
+│                                        Reader (TXN 55): Sees Version 1 ✅   │
+│                                        (started before TXN 60 committed)   │
+│                                                                              │
+│                                        Writer: Creates Version 2 ✅         │
+│                                        (doesn't touch Version 1)           │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════   │
+│                                                                              │
+│  RESULT: READERS NEVER BLOCK WRITERS, WRITERS NEVER BLOCK READERS!          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### How MVCC Works: Version Metadata
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      MVCC HIDDEN COLUMNS                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Every row has HIDDEN system columns tracking its version:                  │
+│                                                                              │
+│  PostgreSQL:                                                                │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  xmin   │  xmax   │  id  │  name   │  balance  │                     │  │
+│  │  (100)  │  (105)  │  1   │ "Alice" │   500     │                     │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│     ▲          ▲                                                            │
+│     │          └── TXN that DELETED/UPDATED this row (made it invisible)    │
+│     └───────────── TXN that CREATED this row (made it visible)              │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  MySQL InnoDB:                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │ DB_TRX_ID │ DB_ROLL_PTR │  id  │  name   │  balance  │               │  │
+│  │   (100)   │  → undo log │  1   │ "Alice" │   500     │               │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│       ▲             ▲                                                       │
+│       │             └── Pointer to UNDO LOG (chain of previous versions)    │
+│       └──────────────── Last TXN that modified this row                     │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### MVCC Visibility Rules
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      MVCC VISIBILITY CHECK                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  QUESTION: Can Transaction 105 see this row version?                        │
+│                                                                              │
+│  Row Version: xmin=100, xmax=110, balance=500                               │
+│                                                                              │
+│  VISIBILITY ALGORITHM:                                                      │
+│  ───────────────────────────────────────────────────────────────────────    │
+│                                                                              │
+│  1. Is xmin (100) committed?                                                │
+│     └── YES? Continue. NO? Row is invisible.                                │
+│                                                                              │
+│  2. Did xmin (100) commit BEFORE my transaction (105) started?              │
+│     └── YES? Row was created before I started. Continue.                   │
+│     └── NO? Row didn't exist when I started. Invisible.                    │
+│                                                                              │
+│  3. Is xmax set? (Someone deleted/updated this version)                     │
+│     └── NO (xmax = ∞)? Row is still live. VISIBLE!                         │
+│     └── YES? Check if xmax transaction is visible to me...                 │
+│                                                                              │
+│  4. Did xmax (110) commit BEFORE my transaction (105) started?              │
+│     └── YES? Row was deleted before I started. INVISIBLE.                  │
+│     └── NO? Row deletion hasn't "happened" from my perspective. VISIBLE!   │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  EXAMPLE:                                                                   │
+│  • TXN 100 created row at T1, committed at T2                              │
+│  • TXN 105 started at T3                                                   │
+│  • TXN 110 deleted row at T4, committed at T5                              │
+│                                                                              │
+│  Timeline: T1 ── T2 ── T3 ── T4 ── T5                                      │
+│            create commit start delete commit                                │
+│            (100)  (100) (105) (110)  (110)                                  │
+│                                                                              │
+│  At T4: TXN 105 sees the row (TXN 110 hasn't committed yet)                │
+│  At T5: TXN 105 STILL sees the row (its snapshot is from T3!)              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### PostgreSQL vs MySQL MVCC
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   PostgreSQL vs MySQL MVCC                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│                   PostgreSQL                    MySQL InnoDB                │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  Old versions      In main table (heap)        In undo log (separate)      │
+│  stored in:        alongside live rows         storage area                 │
+│                                                                              │
+│  Version chain:    Multiple row tuples         Pointer chain through        │
+│                    in same table               undo log entries             │
+│                                                                              │
+│  Index behavior:   Points to ALL versions      Points to latest version    │
+│                    (HOT optimization helps)    (undo log for older)        │
+│                                                                              │
+│  Cleanup:          VACUUM (background)         Purge thread (automatic)     │
+│                    CRITICAL to run!            Generally hands-off          │
+│                                                                              │
+│  Bloat risk:       HIGH - dead tuples          LOW - undo log is separate  │
+│                    accumulate in table                                      │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  POSTGRESQL GOTCHA: The VACUUM Problem                                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ Without VACUUM:                                                     │   │
+│  │ • Dead tuples accumulate in table                                   │   │
+│  │ • Table size grows even without new data                           │   │
+│  │ • Scans get slower (reading dead rows)                             │   │
+│  │ • Eventually: transaction ID wraparound (database stops!)          │   │
+│  │                                                                     │   │
+│  │ SOLUTION:                                                           │   │
+│  │ • autovacuum (default ON, tune aggressiveness)                     │   │
+│  │ • Monitor pg_stat_user_tables for dead tuple ratio                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### MVCC Benefits Summary
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      MVCC BENEFITS                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. READERS NEVER BLOCK WRITERS                                             │
+│     ───────────────────────────                                             │
+│     SELECT doesn't acquire locks that block UPDATE/INSERT                   │
+│     → Perfect for read-heavy OLTP (most web applications!)                  │
+│                                                                              │
+│  2. WRITERS NEVER BLOCK READERS                                             │
+│     ───────────────────────────                                             │
+│     UPDATE doesn't block SELECT (readers see old version)                   │
+│     → No read latency spikes during writes                                  │
+│                                                                              │
+│  3. CONSISTENT SNAPSHOTS                                                    │
+│     ────────────────────                                                    │
+│     Reader sees database as of transaction start                            │
+│     → No "torn reads" or inconsistent data                                  │
+│     → Reports calculate correctly even during updates                       │
+│                                                                              │
+│  4. HIGH THROUGHPUT                                                         │
+│     ───────────────                                                         │
+│     Reads never wait → massively parallel read workloads                    │
+│     → 10x throughput vs pure locking for read-heavy apps                    │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  TRADE-OFFS:                                                                │
+│  • Storage overhead (multiple versions)                                     │
+│  • Cleanup overhead (VACUUM in PostgreSQL)                                  │
+│  • Writers still block writers (same row)                                   │
+│  • Doesn't prevent all anomalies (need isolation levels)                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2.5 Isolation Levels: Choosing Your Protection
+
+> MVCC provides the mechanism. Isolation levels determine HOW MUCH protection you get.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ISOLATION LEVEL SPECTRUM                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WEAKER (Faster)                                    STRONGER (Slower)       │
+│       │                                                   │                  │
+│       ▼                                                   ▼                  │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐        │
+│  │    READ      │ │    READ      │ │  REPEATABLE  │ │ SERIALIZABLE │        │
+│  │ UNCOMMITTED  │ │  COMMITTED   │ │    READ      │ │              │        │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘        │
+│        │                │                │                │                  │
+│        │                │                │                │                  │
+│  ┌─────┴────────────────┴────────────────┴────────────────┴─────┐           │
+│  │                                                              │           │
+│  │  Dirty Read         ❌         ✅         ✅         ✅      │           │
+│  │  Non-Repeatable     ❌         ❌         ✅         ✅      │           │
+│  │  Phantom Read       ❌         ❌         ⚠️*        ✅      │           │
+│  │  Lost Update        ❌         ❌         ✅**       ✅      │           │
+│  │  Write Skew         ❌         ❌         ❌         ✅      │           │
+│  │                                                              │           │
+│  │  ❌ = Can happen    ✅ = Prevented                           │           │
+│  │  * PostgreSQL prevents, MySQL allows                        │           │
+│  │  ** Only with SELECT...FOR UPDATE                           │           │
+│  │                                                              │           │
+│  └──────────────────────────────────────────────────────────────┘           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Level 1: Read Uncommitted (Almost Never Used)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      READ UNCOMMITTED                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WHAT IT DOES:                                                              │
+│  • No protection at all                                                     │
+│  • Can read uncommitted (dirty) data                                        │
+│                                                                              │
+│  HOW IT'S IMPLEMENTED:                                                      │
+│  • No locks for reads, no snapshot isolation                                │
+│  • Just read whatever is currently in the row                               │
+│                                                                              │
+│  PREVENTS:        Nothing                                                   │
+│  ALLOWS:          Dirty Read, Non-Repeatable, Phantom, Lost Update, Write Skew│
+│                                                                              │
+│  USE CASES:       Almost none in production                                 │
+│                   Maybe: Approximate counts where accuracy doesn't matter   │
+│                                                                              │
+│  INTERVIEW NOTE:  "I would never use Read Uncommitted in production.        │
+│                    Even MySQL's default of Repeatable Read is safer."       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Level 2: Read Committed (PostgreSQL Default)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      READ COMMITTED                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WHAT IT DOES:                                                              │
+│  • Only see data that was COMMITTED before your QUERY started              │
+│  • Each query gets a fresh snapshot                                         │
+│                                                                              │
+│  HOW IT'S IMPLEMENTED (MVCC):                                               │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  • At start of each STATEMENT (not transaction), take snapshot             │
+│  • Only see rows where xmin is committed AND xmin < query_start            │
+│                                                                              │
+│  WHY DIRTY READS ARE PREVENTED:                                             │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  TXN B writes balance=100 but hasn't committed                              │
+│  TXN A runs SELECT → checks "is TXN B committed?" → NO → skips that version │
+│  TXN A sees the OLD committed version                                       │
+│                                                                              │
+│  WHY NON-REPEATABLE READS STILL HAPPEN:                                     │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  Query 1 at T1 → sees rows committed before T1                              │
+│  TXN B commits at T2                                                        │
+│  Query 2 at T3 → sees rows committed before T3 (including TXN B!)           │
+│  → Different snapshots = different results                                  │
+│                                                                              │
+│  PREVENTS:        Dirty Read                                                │
+│  ALLOWS:          Non-Repeatable, Phantom, Lost Update, Write Skew          │
+│                                                                              │
+│  USE CASES:       Most OLTP applications                                    │
+│                   When individual query consistency is sufficient           │
+│                   When you don't need cross-query consistency               │
+│                                                                              │
+│  EXAMPLE:                                                                   │
+│  • User views product page → sees committed price                          │
+│  • Price changes between page loads → user sees new price                  │
+│  • Acceptable for most applications!                                        │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Level 3: Repeatable Read (MySQL Default)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      REPEATABLE READ                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WHAT IT DOES:                                                              │
+│  • Snapshot taken at TRANSACTION start (not query start)                   │
+│  • Same query always returns same results within transaction               │
+│                                                                              │
+│  HOW IT'S IMPLEMENTED (MVCC Snapshot Isolation):                            │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  • At BEGIN, record "active transaction list"                              │
+│  • For entire transaction, only see rows committed BEFORE begin            │
+│  • Ignore all commits that happen after transaction started                │
+│                                                                              │
+│  WHY NON-REPEATABLE READS ARE PREVENTED:                                    │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  TXN A begins at T1 (snapshot taken)                                        │
+│  TXN B updates row and commits at T2                                        │
+│  TXN A queries at T3 → still uses T1 snapshot → sees old value!            │
+│  TXN A queries at T4 → still uses T1 snapshot → same old value!            │
+│                                                                              │
+│  HOW LOST UPDATE IS PREVENTED (with SELECT...FOR UPDATE):                   │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  TXN A: SELECT counter FOR UPDATE → gets lock, reads 10                    │
+│  TXN B: SELECT counter FOR UPDATE → ⏳ BLOCKED                              │
+│  TXN A: UPDATE counter = 11, COMMIT → releases lock                        │
+│  TXN B: Lock acquired → reads 11 (current value!) → sets 12                │
+│  ✅ Both increments applied!                                                │
+│                                                                              │
+│  PREVENTS:        Dirty Read, Non-Repeatable Read, Lost Update*            │
+│  ALLOWS:          Phantom (in MySQL), Write Skew                            │
+│  *With explicit locking (FOR UPDATE)                                        │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  POSTGRESQL VS MYSQL DIFFERENCE:                                            │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  PostgreSQL (True Snapshot Isolation):                                      │
+│  • Prevents phantoms! (snapshot includes "no new rows" guarantee)          │
+│  • First-committer-wins for conflicting writes                             │
+│                                                                              │
+│  MySQL (Gap Locking):                                                       │
+│  • Prevents phantoms via gap locks (locks "between" index entries)         │
+│  • But gap locks can cause deadlocks                                       │
+│                                                                              │
+│  USE CASES:                                                                 │
+│  • Reports that need consistent snapshot                                   │
+│  • Business logic with multiple queries                                    │
+│  • When you query same data multiple times in transaction                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Level 4: Serializable (Strongest)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      SERIALIZABLE                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WHAT IT DOES:                                                              │
+│  • Transactions appear to run ONE AT A TIME, in some serial order          │
+│  • No anomalies possible                                                    │
+│                                                                              │
+│  HOW IT'S IMPLEMENTED:                                                      │
+│  ───────────────────────────────────────────────────────────────────────    │
+│                                                                              │
+│  OPTION 1: Strict 2PL (Traditional)                                         │
+│  • Hold all locks until commit                                              │
+│  • Readers block writers, writers block readers                            │
+│  • SLOW but simple                                                          │
+│                                                                              │
+│  OPTION 2: SSI - Serializable Snapshot Isolation (PostgreSQL)               │
+│  • Start with snapshot isolation (MVCC)                                    │
+│  • Track read/write dependencies                                           │
+│  • If cycle detected → abort one transaction                               │
+│  • Better performance than 2PL!                                            │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  HOW SSI DETECTS CYCLES:                                                    │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SSI tracks two types of dependencies between concurrent transactions:      │
+│                                                                              │
+│  1. rw-dependency (read-write): A reads X, then B writes X                 │
+│     "A read something that B later modified"                               │
+│                                                                              │
+│  2. wr-dependency (write-read): A writes X, then B reads X                 │
+│     "B read something that A wrote" (normal visibility)                    │
+│                                                                              │
+│  THE DANGEROUS PATTERN (causes non-serializable execution):                │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                    │    │
+│  │   TXN A ───rw───► TXN B                                           │    │
+│  │     ▲               │                                              │    │
+│  │     │               │                                              │    │
+│  │     └──────rw───────┘                                              │    │
+│  │                                                                    │    │
+│  │   A read something B will write                                   │    │
+│  │   B read something A will write                                   │    │
+│  │   = CYCLE! One must abort.                                        │    │
+│  │                                                                    │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  EXAMPLE (Doctors on-call - Write Skew Prevention):                        │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  TXN A (Alice): Reads on_call count (sees Alice, Bob)                      │
+│  TXN B (Bob):   Reads on_call count (sees Alice, Bob)                      │
+│  TXN A: Writes Alice.on_call = false                                       │
+│  TXN B: Writes Bob.on_call = false                                         │
+│                                                                              │
+│  Dependencies detected by SSI:                                              │
+│  • A read doctors → B wrote to doctors (rw: A→B)                           │
+│  • B read doctors → A wrote to doctors (rw: B→A)                           │
+│  • CYCLE: A→B→A → One transaction aborts!                                  │
+│  • Error: "could not serialize access due to read/write dependencies"      │
+│                                                                              │
+│  💡 This is exactly how SSI prevents WRITE SKEW!                            │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  WHY SSI IS BETTER THAN 2PL:                                               │
+│  • No blocking! Transactions run optimistically                            │
+│  • Only aborts when cycle actually detected                                │
+│  • Most transactions have no cycles → no aborts                            │
+│  • Trade-off: Must handle retry in application                             │
+│                                                                              │
+│  PREVENTS:        ALL anomalies (Dirty, Non-Rep, Phantom, Lost Update,     │
+│                   Write Skew)                                               │
+│                                                                              │
+│  TRADE-OFFS:                                                                │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  • Higher abort rate (must retry failed transactions)                      │
+│  • More overhead (tracking dependencies or holding locks)                  │
+│  • Lower throughput for write-heavy workloads                              │
+│                                                                              │
+│  USE CASES:                                                                 │
+│  • Financial transactions (money transfer)                                 │
+│  • Inventory reservation (prevent overbooking)                             │
+│  • Any business constraint that must NEVER be violated                     │
+│                                                                              │
+│  INTERVIEW TIP: "For our payment service, we use Serializable isolation    │
+│                  for the transfer operation. We accept higher abort rates   │
+│                  because correctness is more important than throughput."    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Weak Isolation vs Strong Isolation
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    WEAK vs STRONG ISOLATION                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌───────────────────────────────┬───────────────────────────────────────┐  │
+│  │       WEAK ISOLATION          │        STRONG ISOLATION              │  │
+│  ├───────────────────────────────┼───────────────────────────────────────┤  │
+│  │  • Read Uncommitted           │  • Serializable                       │  │
+│  │  • Read Committed             │                                       │  │
+│  │  • Repeatable Read            │                                       │  │
+│  │  • Snapshot Isolation         │                                       │  │
+│  ├───────────────────────────────┼───────────────────────────────────────┤  │
+│  │  ✅ High performance           │  ✅ No anomalies                      │  │
+│  │  ✅ High throughput            │  ✅ Full correctness                  │  │
+│  │  ❌ Allows some anomalies      │  ❌ Lower throughput                  │  │
+│  │  ❌ Subtle bugs possible       │  ❌ Higher abort rate                 │  │
+│  └───────────────────────────────┴───────────────────────────────────────┘  │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  WHY DO MOST DATABASES DEFAULT TO WEAK ISOLATION?                          │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  • PostgreSQL default: Read Committed (weak)                               │
+│  • MySQL default: Repeatable Read (weak - allows write skew)               │
+│  • Oracle default: Read Committed (weak)                                   │
+│  • SQL Server default: Read Committed (weak)                               │
+│                                                                              │
+│  REASON: Performance! Most applications don't need Serializable.           │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  THE DANGER OF WEAK ISOLATION:                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  • Works fine in development (low concurrency)                             │
+│  • Works fine with light production load                                   │
+│  • BREAKS under high concurrency! (race conditions appear)                 │
+│  • Subtle bugs: inventory goes negative, money disappears, double-booking │
+│                                                                              │
+│  INTERVIEW TIP:                                                            │
+│  "Most production bugs I've seen come from developers not understanding    │
+│   that their database uses weak isolation by default. They assume         │
+│   transactions are fully isolated, but write skew and lost updates        │
+│   can still happen. For critical operations like payments, I explicitly   │
+│   use Serializable or add pessimistic locks."                             │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Choosing the Right Isolation Level
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  ISOLATION LEVEL DECISION TREE                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  START HERE: What does your operation need?                                 │
+│                                                                              │
+│                    ┌─────────────────────────────┐                          │
+│                    │  Does your transaction do   │                          │
+│                    │  multiple related queries?  │                          │
+│                    └─────────────────────────────┘                          │
+│                           │           │                                     │
+│                          NO          YES                                    │
+│                           │           │                                     │
+│                           ▼           ▼                                     │
+│                    ┌──────────┐  ┌─────────────────────────────┐            │
+│                    │   READ   │  │  Do you check something,   │            │
+│                    │COMMITTED │  │  then update based on it?  │            │
+│                    └──────────┘  └─────────────────────────────┘            │
+│                                        │           │                        │
+│                                       NO          YES                       │
+│                                        │           │                        │
+│                                        ▼           ▼                        │
+│                               ┌──────────────┐ ┌─────────────────┐          │
+│                               │  REPEATABLE  │ │  SERIALIZABLE   │          │
+│                               │     READ     │ │       or        │          │
+│                               │              │ │ SELECT...FOR    │          │
+│                               │              │ │ UPDATE + check  │          │
+│                               └──────────────┘ └─────────────────┘          │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  PRACTICAL RECOMMENDATIONS:                                                 │
+│                                                                              │
+│  READ COMMITTED (PostgreSQL default):                                       │
+│  • General OLTP, user-facing APIs                                          │
+│  • Single queries, eventual consistency OK                                 │
+│  • Example: "Show me current inventory"                                    │
+│                                                                              │
+│  REPEATABLE READ (MySQL default):                                           │
+│  • Reports, analytics within transaction                                   │
+│  • Multi-query operations needing consistency                              │
+│  • Example: "Generate monthly statement"                                   │
+│                                                                              │
+│  SERIALIZABLE:                                                              │
+│  • Financial transfers                                                      │
+│  • Booking systems (prevent double-booking)                                │
+│  • Any check-then-act with business constraint                             │
+│  • Example: "Transfer $100 from A to B"                                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2.6 🔗 How It All Ties Together
+
+> **Now that you understand locking, MVCC, and isolation levels, let's connect everything!**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE BIG PICTURE                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WHAT YOU WANT:      Run concurrent transactions without data corruption    │
+│                                                                              │
+│  WHAT CAN GO WRONG:  Anomalies (dirty read, lost update, write skew, etc.) │
+│                      (Covered in Section 2.2)                               │
+│                                                                              │
+│  HOW TO PREVENT:     Two mechanisms (HOW it's done)                         │
+│                      ├── Locking (block conflicts) → Section 2.3           │
+│                      └── MVCC (multiple versions) → Section 2.4            │
+│                                                                              │
+│  HOW MUCH TO PREVENT: Isolation Levels (WHAT protection level)              │
+│                      (Section 2.5)                                          │
+│                      ├── Read Committed → prevents some anomalies           │
+│                      ├── Repeatable Read → prevents more                    │
+│                      └── Serializable → prevents all                        │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│           ISOLATION LEVELS                 IMPLEMENTED BY                   │
+│           (The WHAT)                       (The HOW)                        │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  Read Committed       ─────────────►   MVCC (only see committed versions)  │
+│                                                                              │
+│  Repeatable Read      ─────────────►   MVCC (snapshot at txn start)        │
+│                                        + Gap locks for phantoms (MySQL)     │
+│                                                                              │
+│  Serializable         ─────────────►   MVCC + Dependency tracking (SSI)    │
+│                            OR          Strict 2PL (lock everything)        │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  KEY INSIGHT:                                                               │
+│  • Isolation Level = The DIAL you turn (how much protection)               │
+│  • Locking & MVCC = The ENGINE inside (how protection is achieved)         │
+│  • You choose the isolation level; database uses locking/MVCC internally   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Why Atomic Operations Don't Solve Everything
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│          ATOMIC OPERATIONS vs ISOLATION LEVELS                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ATOMIC OPERATION: UPDATE counter = counter + 1                             │
+│  ✅ Prevents: Lost Update (for simple increment)                            │
+│  ❌ Cannot prevent: Write Skew, Phantom, complex business logic            │
+│                                                                              │
+│  WHY?                                                                       │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  Atomic ops work when: single row, simple operation, no decisions needed   │
+│                                                                              │
+│  Write Skew example (doctors on-call):                                      │
+│  1. SELECT COUNT(*) WHERE on_call = true → 2                               │
+│  2. DECIDE: "OK, I can go off-call"                                        │
+│  3. UPDATE doctors SET on_call = false WHERE name = 'Alice'                │
+│                                                                              │
+│  No single atomic operation can do CHECK + DECIDE + UPDATE!                │
+│  You need: Serializable isolation OR explicit SELECT...FOR UPDATE          │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  RULE OF THUMB:                                                             │
+│  • Simple increment/decrement → Use atomic operation                       │
+│  • Check-then-act logic → Use locking (FOR UPDATE) or Serializable         │
+│  • Complex multi-row logic → Use Serializable isolation                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+#### Database vs Application: Who Handles What?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│        WHAT DATABASE HANDLES vs WHAT YOU MUST DO                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════   │
+│  SQL DATABASES (PostgreSQL, MySQL)                                          │
+│  ════════════════════════════════════════════════════════════════════════   │
+│                                                                              │
+│  DATABASE HANDLES AUTOMATICALLY:                                            │
+│  ───────────────────────────────                                            │
+│  ✅ Dirty writes (always blocked via X-locks)                              │
+│  ✅ Dirty reads (at Read Committed+, via MVCC)                             │
+│  ✅ Non-repeatable reads (at Repeatable Read+, via MVCC snapshot)          │
+│  ✅ Phantoms (at Serializable, or RR in PostgreSQL)                        │
+│  ✅ ACID transactions (atomicity, durability via WAL)                      │
+│  ✅ Constraint enforcement (UNIQUE, FOREIGN KEY, CHECK)                    │
+│                                                                              │
+│  YOU MUST HANDLE (Application Level):                                       │
+│  ────────────────────────────────────                                       │
+│  ⚠️  Lost Update → Use atomic ops OR SELECT...FOR UPDATE OR optimistic lock│
+│  ⚠️  Write Skew → Use Serializable OR SELECT...FOR UPDATE on read rows    │
+│  ⚠️  Business constraints → DB constraints if possible, else app logic     │
+│  ⚠️  Retry logic → For deadlocks and serialization failures               │
+│                                                                              │
+│  ════════════════════════════════════════════════════════════════════════   │
+│  NoSQL DATABASES (DynamoDB, Cassandra, Redis)                               │
+│  ════════════════════════════════════════════════════════════════════════   │
+│                                                                              │
+│  DATABASE HANDLES AUTOMATICALLY:                                            │
+│  ───────────────────────────────                                            │
+│  ✅ Single-item/single-partition atomicity                                 │
+│  ✅ Basic durability (replication)                                         │
+│                                                                              │
+│  YOU MUST HANDLE (Application Level):                                       │
+│  ────────────────────────────────────                                       │
+│  ⚠️  Multi-item atomicity → TransactWriteItems (DynamoDB) or app logic     │
+│  ⚠️  Lost Update → ConditionExpression / CAS / optimistic locking          │
+│  ⚠️  Consistency → Choose consistency level per query                      │
+│  ⚠️  ALL business constraints → Application enforced!                      │
+│  ⚠️  Read-modify-write → Always use conditional updates                    │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  KEY DIFFERENCE:                                                            │
+│  • SQL: "Database protects you by default, opt-out if needed"              │
+│  • NoSQL: "You protect yourself, database gives you tools"                 │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Developer Decision Tree
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│           HOW TO HANDLE CONCURRENCY: DECISION TREE                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  START: What operation are you doing?                                       │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                     │   │
+│  │  Q1: Is it a simple increment/decrement/append?                     │   │
+│  │      │                                                              │   │
+│  │      ├─ YES → Use ATOMIC OPERATION                                  │   │
+│  │      │        SQL: UPDATE x SET count = count + 1                   │   │
+│  │      │        DynamoDB: ADD count :val                              │   │
+│  │      │        Redis: INCR key                                       │   │
+│  │      │                                                              │   │
+│  │      └─ NO → Continue to Q2                                         │   │
+│  │                                                                     │   │
+│  │  Q2: Do you READ then WRITE based on what you read?                 │   │
+│  │      │                                                              │   │
+│  │      ├─ YES → Is conflict rate HIGH or LOW?                         │   │
+│  │      │        │                                                     │   │
+│  │      │        ├─ HIGH (hot data) → PESSIMISTIC LOCKING (2.7)       │   │
+│  │      │        │   SQL: SELECT ... FOR UPDATE                        │   │
+│  │      │        │   Blocks others until you commit                   │   │
+│  │      │        │                                                     │   │
+│  │      │        └─ LOW (rare conflicts) → OPTIMISTIC LOCKING (2.7)   │   │
+│  │      │            SQL: Version column + retry                       │   │
+│  │      │            DynamoDB: ConditionExpression + retry             │   │
+│  │      │                                                              │   │
+│  │      └─ NO → Continue to Q3                                         │   │
+│  │                                                                     │   │
+│  │  Q3: Do you check MULTIPLE rows then make a decision?               │   │
+│  │      (e.g., count doctors, then update one)                         │   │
+│  │      │                                                              │   │
+│  │      ├─ YES → WRITE SKEW risk!                                     │   │
+│  │      │        SQL: Use SERIALIZABLE isolation (2.5)                 │   │
+│  │      │        OR: SELECT ... FOR UPDATE on the rows you check      │   │
+│  │      │        NoSQL: Very hard! Redesign data model if possible    │   │
+│  │      │                                                              │   │
+│  │      └─ NO → Default isolation is probably fine                     │   │
+│  │              SQL: Read Committed                                    │   │
+│  │              NoSQL: Eventual/Strong as needed                       │   │
+│  │                                                                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Quick Reference: Anomaly → Solution
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│            ANOMALY → WHAT TO DO                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ANOMALY          │ SQL SOLUTION              │ NoSQL SOLUTION              │
+│  ─────────────────┼───────────────────────────┼─────────────────────────────│
+│  Dirty Read       │ Default (Read Committed)  │ N/A (single-item atomic)    │
+│                   │ Handled by MVCC           │                             │
+│  ─────────────────┼───────────────────────────┼─────────────────────────────│
+│  Non-Repeatable   │ Use Repeatable Read       │ Re-read with strong         │
+│                   │ Handled by MVCC snapshot  │ consistency                 │
+│  ─────────────────┼───────────────────────────┼─────────────────────────────│
+│  Phantom          │ Use Serializable          │ Redesign data model         │
+│                   │ (or RR in PostgreSQL)     │ (very hard in NoSQL)        │
+│  ─────────────────┼───────────────────────────┼─────────────────────────────│
+│  Lost Update      │ Atomic op OR              │ ConditionExpression         │
+│                   │ SELECT...FOR UPDATE OR    │ (optimistic locking)        │
+│                   │ Optimistic locking        │ Must handle in app!         │
+│  ─────────────────┼───────────────────────────┼─────────────────────────────│
+│  Write Skew       │ Serializable OR           │ Very difficult!             │
+│                   │ Lock the rows you read    │ Consider SQL for this       │
+│                   │ (SELECT...FOR UPDATE)     │ use case                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2.7 Pessimistic vs Optimistic Locking
+
+> Two fundamentally different philosophies for handling concurrent updates.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              PESSIMISTIC vs OPTIMISTIC LOCKING                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  PESSIMISTIC LOCKING:                    OPTIMISTIC LOCKING:                │
+│  ─────────────────────                   ──────────────────────             │
+│  "Assume conflicts WILL happen"          "Assume conflicts are RARE"        │
+│  "Lock first, then work"                 "Work first, check at commit"      │
+│                                                                              │
+│  ┌─────────────────────────────┐        ┌─────────────────────────────┐    │
+│  │ 1. SELECT ... FOR UPDATE   │        │ 1. SELECT with version      │    │
+│  │    (acquire lock)          │        │    (no lock)                │    │
+│  │                            │        │                             │    │
+│  │ 2. Do business logic       │        │ 2. Do business logic        │    │
+│  │    (others wait)           │        │    (no blocking!)           │    │
+│  │                            │        │                             │    │
+│  │ 3. UPDATE                  │        │ 3. UPDATE WHERE version = X │    │
+│  │                            │        │    (check version)          │    │
+│  │ 4. COMMIT                  │        │                             │    │
+│  │    (release lock)          │        │ 4. If 0 rows affected:      │    │
+│  │                            │        │    → CONFLICT! Retry        │    │
+│  └─────────────────────────────┘        └─────────────────────────────┘    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Pessimistic Locking (SELECT ... FOR UPDATE)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   PESSIMISTIC LOCKING EXAMPLE                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO: Decrement inventory for order                                    │
+│                                                                              │
+│  TXN A                                TXN B                                 │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  BEGIN                                BEGIN                                 │
+│  SELECT stock FROM products                                                 │
+│  WHERE id = 123                                                             │
+│  FOR UPDATE;                                                                │
+│  → Returns stock = 5                                                        │
+│  → Holds X-lock on row                                                      │
+│                                                                              │
+│                                        SELECT stock FROM products           │
+│                                        WHERE id = 123                       │
+│                                        FOR UPDATE;                          │
+│                                        → ⏳ BLOCKED! Waiting for lock...    │
+│                                                                              │
+│  -- Check: Is stock >= 1?                                                   │
+│  UPDATE products                                                            │
+│  SET stock = stock - 1                                                      │
+│  WHERE id = 123;                                                            │
+│  COMMIT;                                                                    │
+│  → Releases lock                                                            │
+│                                                                              │
+│                                        → Lock acquired!                     │
+│                                        → Returns stock = 4 (updated value!) │
+│                                        UPDATE products                      │
+│                                        SET stock = stock - 1                │
+│                                        WHERE id = 123;                      │
+│                                        COMMIT;                              │
+│                                                                              │
+│  RESULT: stock = 3 (both decrements applied correctly!)                     │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  VARIANTS:                                                                  │
+│  • FOR UPDATE           → Exclusive lock (blocks other FOR UPDATEs)        │
+│  • FOR SHARE            → Shared lock (allows other FOR SHAREs)            │
+│  • FOR UPDATE NOWAIT    → Error immediately if lock unavailable            │
+│  • FOR UPDATE SKIP LOCKED → Skip locked rows (useful for job queues!)      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Optimistic Locking (Version Column)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   OPTIMISTIC LOCKING EXAMPLE                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  TABLE SCHEMA:                                                              │
+│  products (id, name, stock, version)                                        │
+│                                       ▲                                     │
+│                                       └── Version column for conflict detection│
+│                                                                              │
+│  TXN A                                TXN B                                 │
+│  ───────────────────────────────────────────────────────────────────────    │
+│  BEGIN                                BEGIN                                 │
+│  SELECT stock, version                                                      │
+│  FROM products                                                              │
+│  WHERE id = 123;                                                            │
+│  → stock = 5, version = 7                                                   │
+│  → NO LOCK ACQUIRED!                                                        │
+│                                        SELECT stock, version                │
+│                                        FROM products                        │
+│                                        WHERE id = 123;                      │
+│                                        → stock = 5, version = 7            │
+│                                        → NO LOCK!                           │
+│                                                                              │
+│  -- Do business logic (maybe slow)                                          │
+│                                        -- Do business logic (parallel!)     │
+│                                                                              │
+│  UPDATE products                                                            │
+│  SET stock = 4, version = 8                                                 │
+│  WHERE id = 123 AND version = 7;                                            │
+│  → 1 row affected ✓                                                         │
+│  COMMIT;                                                                    │
+│                                                                              │
+│                                        UPDATE products                      │
+│                                        SET stock = 4, version = 8          │
+│                                        WHERE id = 123 AND version = 7;     │
+│                                        → 0 rows affected! ← VERSION CHANGED!│
+│                                        → Application detects conflict       │
+│                                        → RETRY from beginning               │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  KEY INSIGHT:                                                               │
+│  • No blocking during read or business logic                               │
+│  • Conflict detected at UPDATE time via version mismatch                   │
+│  • Application must handle retry logic                                     │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Comparison and When to Use Each
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│               PESSIMISTIC vs OPTIMISTIC: WHEN TO USE                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│                       PESSIMISTIC              OPTIMISTIC                   │
+│  ────────────────────────────────────────────────────────────────────────── │
+│  Conflict rate        High                     Low                          │
+│  Lock duration        Entire operation         None (check at commit)       │
+│  Throughput           Lower (blocking)         Higher (no blocking)         │
+│  Deadlock risk        Yes                      No (no locks!)              │
+│  Retry logic          Not needed               Required in application      │
+│  Starvation           Possible (long waits)    No (but retries)            │
+│                                                                              │
+│  ────────────────────────────────────────────────────────────────────────── │
+│                                                                              │
+│  USE PESSIMISTIC WHEN:                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ • Conflicts are FREQUENT (hot rows)                                 │   │
+│  │ • Cost of retry is HIGH (long business logic)                       │   │
+│  │ • Operation MUST succeed on first try                               │   │
+│  │ • Short transactions (lock held briefly)                            │   │
+│  │                                                                     │   │
+│  │ Examples:                                                           │   │
+│  │ • Ticket booking (limited seats, many buyers)                       │   │
+│  │ • Inventory decrement on flash sale                                 │   │
+│  │ • Bank account balance update                                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  USE OPTIMISTIC WHEN:                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ • Conflicts are RARE (users editing different documents)            │   │
+│  │ • Read-heavy, occasional writes                                     │   │
+│  │ • Long-running operations (don't want to hold locks)                │   │
+│  │ • Distributed systems (hard to coordinate locks)                    │   │
+│  │                                                                     │   │
+│  │ Examples:                                                           │   │
+│  │ • Wiki/document editing (usually different pages)                   │   │
+│  │ • User profile updates                                              │   │
+│  │ • Shopping cart modifications                                       │   │
+│  │ • API updates where retries are acceptable                          │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ────────────────────────────────────────────────────────────────────────── │
+│                                                                              │
+│  INTERVIEW ANSWER:                                                          │
+│  "For our inventory system during flash sales, I'd use pessimistic         │
+│   locking (SELECT FOR UPDATE) because conflict rate is very high—          │
+│   thousands competing for limited stock. Optimistic would cause            │
+│   endless retries. For user profile updates, I'd use optimistic            │
+│   locking with a version column since conflicts are rare."                 │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│        DATABASE-LEVEL vs APPLICATION-LEVEL: Who Does What?                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  PESSIMISTIC LOCKING:                                                       │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  ✅ DATABASE-LEVEL mechanism                                                │
+│  • SELECT ... FOR UPDATE is a database feature                             │
+│  • Database manages the locks internally                                   │
+│  • Application just issues the SQL command                                 │
+│  • Lock released automatically on COMMIT/ROLLBACK                          │
+│                                                                              │
+│  OPTIMISTIC LOCKING:                                                        │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  ⚠️  APPLICATION-LEVEL pattern                                              │
+│  • Database has NO built-in "optimistic lock" command                      │
+│  • Application adds a version/timestamp column                             │
+│  • Application reads version, includes in WHERE clause                     │
+│  • Application handles retry logic on conflict                             │
+│  • Database just executes normal SELECT/UPDATE - doesn't "know" it's OL    │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  ⚠️  WAIT! Doesn't MVCC already have versions? Why add another?            │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  MVCC VERSIONS (Database internal):                                         │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │  • Hidden columns: xmin/xmax (PostgreSQL), DB_TRX_ID (MySQL)       │    │
+│  │  • Purpose: READ CONSISTENCY - which version can I SEE?            │    │
+│  │  • Managed by: Database automatically                              │    │
+│  │  • Invisible to application                                        │    │
+│  │  • Used for: Snapshot isolation, non-blocking reads               │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  OPTIMISTIC LOCK VERSION (Application column):                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │  • Explicit column: version INT or updated_at TIMESTAMP            │    │
+│  │  • Purpose: WRITE CONFLICT DETECTION - did someone else change it?│    │
+│  │  • Managed by: Application (or ORM)                                │    │
+│  │  • Visible to application                                          │    │
+│  │  • Used for: Detecting concurrent modifications                   │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  THEY SOLVE DIFFERENT PROBLEMS:                                             │
+│  • MVCC: "What version should I READ?" (isolation)                         │
+│  • OL:   "Did someone WRITE since I read?" (conflict detection)            │
+│                                                                              │
+│  MVCC doesn't prevent lost updates! You can read version 1, someone        │
+│  else writes version 2, you overwrite with your changes → LOST UPDATE.    │
+│  Optimistic locking's version column catches this!                         │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  ORM SUPPORT (makes optimistic locking easier):                            │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  Hibernate/JPA:    @Version annotation → auto-manages version column │  │
+│  │  ActiveRecord:     lock_version column → auto-increment on save      │  │
+│  │  Django:           Manual or django-concurrency package              │  │
+│  │  Sequelize:        version: true in model options                    │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  NoSQL EQUIVALENT:                                                          │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  DynamoDB:         ConditionExpression (built-in!)                   │  │
+│  │  Cassandra:        IF column = value (Lightweight Transactions)      │  │
+│  │  Redis:            WATCH + MULTI/EXEC                                │  │
+│  │  MongoDB:          findOneAndUpdate with version check               │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Optimistic Locking Retry Pattern (Application Code)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   OPTIMISTIC LOCKING: RETRY PATTERN                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  PSEUDOCODE:                                                                │
+│  ───────────────────────────────────────────────────────────────────────    │
+│                                                                              │
+│  function decrementStock(productId):                                        │
+│      maxRetries = 3                                                         │
+│      for attempt in 1..maxRetries:                                          │
+│          // 1. Read current state                                           │
+│          row = SELECT stock, version FROM products WHERE id = productId    │
+│                                                                              │
+│          // 2. Business logic                                               │
+│          if row.stock < 1:                                                  │
+│              throw "Out of stock"                                           │
+│          newStock = row.stock - 1                                           │
+│                                                                              │
+│          // 3. Conditional update                                           │
+│          rowsAffected = UPDATE products                                     │
+│                         SET stock = newStock, version = row.version + 1     │
+│                         WHERE id = productId AND version = row.version     │
+│                                                                              │
+│          // 4. Check if successful                                          │
+│          if rowsAffected == 1:                                              │
+│              return SUCCESS                                                 │
+│          else:                                                              │
+│              // Someone else modified the row, retry                        │
+│              continue                                                       │
+│                                                                              │
+│      // All retries exhausted                                               │
+│      throw "Concurrent modification, please retry"                          │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  VARIATIONS:                                                                │
+│  • Exponential backoff between retries                                     │
+│  • Use timestamp instead of version (updated_at column)                    │
+│  • Hash of row content as "version" (no extra column needed)               │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2.8 Famous Concurrency Problems & Solutions (Interview Gold!)
+
+> Real-world problems that frequently appear in system design interviews. Know these cold!
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FAMOUS CONCURRENCY PROBLEMS                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  These are the "classic" scenarios interviewers love to ask about.          │
+│  Each demonstrates a different anomaly and requires a specific solution.   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Problem 1: The Bank Transfer (Lost Update / Atomicity)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    BANK TRANSFER                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO:                                                                  │
+│  Transfer $100 from Alice to Bob                                            │
+│                                                                              │
+│  WHAT CAN GO WRONG:                                                         │
+│  • Crash after deducting from Alice, before adding to Bob → $100 vanishes  │
+│  • Two transfers at same time → Lost updates, incorrect balances           │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION (SQL): Just use a transaction with atomic updates!               │
+│  ───────────────────────────────────────────────────────────               │
+│                                                                              │
+│  BEGIN;                                                                     │
+│  UPDATE accounts SET balance = balance - 100                                │
+│         WHERE user = 'Alice' AND balance >= 100;  -- Atomic check!         │
+│  -- If 0 rows affected → insufficient balance, ROLLBACK                    │
+│  UPDATE accounts SET balance = balance + 100 WHERE user = 'Bob';            │
+│  COMMIT;                                                                     │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  WHY THIS WORKS:                                                            │
+│  • TRANSACTION: All or nothing (atomicity) - crash safe                    │
+│  • balance >= 100 in WHERE: Atomic check, no read-then-write race          │
+│  • Default isolation (Read Committed) is sufficient!                       │
+│                                                                              │
+│  No need for Serializable or FOR UPDATE for simple transfers!              │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION (NoSQL - DynamoDB):                                               │
+│  ────────────────────────────                                               │
+│  TransactWriteItems([                                                       │
+│    { Update: {Key: {user: 'Alice'}, UpdateExpression: 'SET balance = balance - :amt',│
+│               ConditionExpression: 'balance >= :amt'} },                   │
+│    { Update: {Key: {user: 'Bob'}, UpdateExpression: 'SET balance = balance + :amt'} }│
+│  ])                                                                         │
+│  // Atomic across both items, but 2x cost!                                 │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Problem 2: The Flash Sale Inventory (Race Condition)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FLASH SALE: LIMITED INVENTORY                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SCENARIO:                                                                  │
+│  10 iPhones for sale, 1000 users clicking "Buy" simultaneously             │
+│                                                                              │
+│  WHAT CAN GO WRONG (Read-Modify-Write):                                    │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  User A: SELECT stock → 10                                           │  │
+│  │  User B: SELECT stock → 10                                           │  │
+│  │  User A: UPDATE stock = 9 → success                                  │  │
+│  │  User B: UPDATE stock = 9 → success (SAME VALUE!)                    │  │
+│  │                                                                      │  │
+│  │  Result: 2 items sold, but stock only decreased by 1!                │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  OVERSOLD: 15 purchases processed, only 10 items exist!                    │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 1: Atomic Decrement (Best for simple cases)                       │
+│  ──────────────────────────────────────────────────────                     │
+│  UPDATE products SET stock = stock - 1                                      │
+│  WHERE id = 123 AND stock > 0;                                              │
+│                                                                              │
+│  IF rows_affected = 0 → "Out of Stock"                                     │
+│  IF rows_affected = 1 → "Success!"                                         │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 2: Pessimistic Lock (When business logic is complex)              │
+│  ─────────────────────────────────────────────────────────────              │
+│  BEGIN;                                                                     │
+│  SELECT stock FROM products WHERE id = 123 FOR UPDATE;                      │
+│  -- Only one transaction can hold this lock!                               │
+│  IF stock > 0:                                                              │
+│      -- Complex business logic (calculate discounts, check user, etc.)     │
+│      UPDATE products SET stock = stock - 1 WHERE id = 123;                  │
+│      INSERT INTO orders (...);                                              │
+│      COMMIT;                                                                 │
+│  ELSE:                                                                      │
+│      ROLLBACK;                                                              │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 3: Optimistic Lock (Lower contention scenarios)                   │
+│  ────────────────────────────────────────────────────────                   │
+│  SELECT stock, version FROM products WHERE id = 123;                        │
+│  -- version = 5, stock = 10                                                │
+│  UPDATE products SET stock = 9, version = 6                                 │
+│  WHERE id = 123 AND version = 5;                                            │
+│  -- If rows_affected = 0, someone else got there first → RETRY             │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  REDIS SOLUTION (For distributed rate limiting + inventory):                │
+│  ────────────────────────────────────────────────────────                   │
+│  DECR inventory:product:123   -- Atomic decrement                          │
+│  if result < 0:                                                             │
+│      INCR inventory:product:123  -- Rollback                               │
+│      return "Out of Stock"                                                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Problem 3: The Flight Booking (Phantom Read)
+
+> **Anomaly:** Phantom Read (→ See Section 2.2 for full explanation)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FLIGHT BOOKING: SOLUTIONS                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SOLUTION 1: UNIQUE Constraint (Best - Database Enforced!)                  │
+│  ─────────────────────────────────────────────────────────                  │
+│  -- Create a "seats" table with seat numbers                               │
+│  INSERT INTO seat_assignments (flight_id, seat_number, passenger)           │
+│  VALUES (123, 'A1', 'Alice');                                               │
+│                                                                              │
+│  -- UNIQUE constraint on (flight_id, seat_number) prevents duplicates!     │
+│  -- If duplicate: catch exception, try another seat                        │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 2: Counter Table + Atomic Decrement                               │
+│  ────────────────────────────────────────────                               │
+│  UPDATE flight_availability SET seats_remaining = seats_remaining - 1      │
+│  WHERE flight_id = 123 AND seats_remaining > 0;                             │
+│                                                                              │
+│  IF rows_affected = 1: INSERT INTO bookings (...);                         │
+│  ELSE: "Sorry, no seats available"                                         │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 3: Serializable Isolation (Simple but expensive)                  │
+│  ─────────────────────────────────────────────────────────                  │
+│  SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;                              │
+│  BEGIN;                                                                     │
+│  SELECT COUNT(*) FROM bookings WHERE flight_id = 123;                       │
+│  IF count < 150: INSERT INTO bookings (...);                               │
+│  COMMIT;  -- Aborts if phantom detected, must RETRY                        │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Problem 4: The On-Call Doctors (Write Skew)
+
+> **Anomaly:** Write Skew (→ See Section 2.2 for full explanation)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ON-CALL SCHEDULING: SOLUTIONS                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WHY COMMON SOLUTIONS DON'T WORK:                                           │
+│  • Atomic operation? Can't do CHECK + DECIDE + UPDATE atomically           │
+│  • Repeatable Read? Doesn't prevent write skew (different rows)           │
+│  • Optimistic locking? No version conflict (updating different rows)      │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 1: SELECT ... FOR UPDATE (Lock what you read!)                   │
+│  ───────────────────────────────────────────────────────                   │
+│  BEGIN;                                                                     │
+│  SELECT * FROM doctors WHERE on_call = true FOR UPDATE;                     │
+│  -- Locks ALL on-call doctors' rows! Other transaction must wait.         │
+│  IF count > 1:                                                              │
+│      UPDATE doctors SET on_call = false WHERE name = 'Alice';               │
+│  COMMIT;                                                                     │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 2: Serializable Isolation (PostgreSQL SSI)                        │
+│  ───────────────────────────────────────────────────                        │
+│  SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;                              │
+│  -- SSI detects read-write dependency cycle and aborts one transaction    │
+│  -- See Section 2.5 for how SSI cycle detection works                     │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  SOLUTION 3: Database Constraint (Best if possible)                         │
+│  ──────────────────────────────────────────────────                         │
+│  -- Use a trigger or CHECK constraint to enforce minimum coverage          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Problems 5 & 6: Distributed Systems Territory
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│        THESE BELONG IN LEVEL 3: DISTRIBUTED SYSTEMS                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  The following problems are NOT single-node concurrency issues:            │
+│                                                                              │
+│  • LIKE BUTTON (Hot Row / Sharding)                                        │
+│    → Problem: Single row bottleneck at extreme scale                       │
+│    → Solution: Redis, sharded counters, async writes                       │
+│    → See Level 3 for: Distributed counters, caching patterns              │
+│                                                                              │
+│  • SHOPPING CART (Read-Your-Writes)                                        │
+│    → Problem: Replication lag between primary and replicas                 │
+│    → Solution: Read from primary, sticky sessions, version-aware reads     │
+│    → See Level 3 for: Consistency models, replication strategies          │
+│                                                                              │
+│  These require distributed systems knowledge covered in Level 3!           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Quick Reference: Problem → Solution (Single-Node)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              INTERVIEW CHEAT SHEET: FAMOUS PROBLEMS                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  PROBLEM              │ ANOMALY        │ GO-TO SOLUTION                     │
+│  ─────────────────────┼────────────────┼────────────────────────────────── │
+│  Bank Transfer        │ Lost Update    │ Atomic update in transaction       │
+│  Flash Sale           │ Lost Update    │ Atomic decrement: stock = stock-1  │
+│  Flight Booking       │ Phantom Read   │ UNIQUE constraint or Serializable  │
+│  On-Call Doctors      │ Write Skew     │ FOR UPDATE or Serializable         │
+│                                                                              │
+│  (Like Button, Shopping Cart → See Level 3: Distributed Systems)           │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  INTERVIEW PATTERN:                                                         │
+│  1. Identify the anomaly (lost update? write skew? phantom?)               │
+│  2. Choose isolation level OR explicit locking                             │
+│  3. Mention retry logic for aborted transactions                           │
+│  4. Discuss scale: "At extreme scale, we'd use Redis/sharding"            │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Real-World: Alternatives to Serializable at Scale
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│        WHY SERIALIZABLE DOESN'T SCALE (And What To Do Instead)               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SERIALIZABLE PROBLEMS AT HIGH SCALE:                                       │
+│  ─────────────────────────────────────                                      │
+│  • Higher abort rate → more retries → higher latency                       │
+│  • Dependency tracking overhead → CPU cost                                 │
+│  • Contention on hot data → throughput collapse                            │
+│  • Cross-shard serializable? → Distributed transactions (2PC) = slow!      │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  REAL-WORLD ALTERNATIVES:                                                   │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  1. AVOID THE PROBLEM BY DESIGN                                            │
+│  ───────────────────────────────                                           │
+│  • Denormalize data so transactions touch one row/partition                │
+│  • Design so conflicts are impossible (user can only edit own data)       │
+│  • Use event sourcing: append-only, no overwrites, no conflicts           │
+│                                                                              │
+│  Example: Instead of checking doctor count, assign doctors to SLOTS        │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │  Old: Check count, then update → Write Skew possible               │    │
+│  │  New: INSERT INTO on_call_slots (slot_id, doctor) VALUES (1, 'Alice')│   │
+│  │       UNIQUE constraint on slot_id → database prevents conflict!    │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  2. DATABASE CONSTRAINTS INSTEAD OF ISOLATION                               │
+│  ────────────────────────────────────────────                              │
+│  • UNIQUE constraints → prevent duplicate bookings                         │
+│  • CHECK constraints → prevent negative balance                            │
+│  • FOREIGN KEY → prevent orphan records                                    │
+│  • Triggers → complex business rules                                       │
+│                                                                              │
+│  Flight booking example:                                                    │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │  CREATE TABLE seat_assignments (                                   │    │
+│  │    flight_id INT,                                                  │    │
+│  │    seat_number VARCHAR(5),                                         │    │
+│  │    passenger_id INT,                                               │    │
+│  │    PRIMARY KEY (flight_id, seat_number)  -- Can't double-book!    │    │
+│  │  );                                                                │    │
+│  │                                                                    │    │
+│  │  INSERT fails if seat already taken → no Serializable needed!     │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  3. EXPLICIT LOCKING (FOR UPDATE) AT LOWER ISOLATION                       │
+│  ───────────────────────────────────────────────────                       │
+│  • Use Read Committed (default) + SELECT FOR UPDATE on specific rows      │
+│  • Lock only what you need, not entire table                              │
+│  • More control, less overhead than Serializable                          │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  4. MOVE HOT DATA TO REDIS/CACHE                                           │
+│  ─────────────────────────────────                                         │
+│  • Counters, rate limits, inventory counts → Redis atomic ops             │
+│  • Async sync back to database                                            │
+│  • Accept eventual consistency for non-critical data                      │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  5. DISTRIBUTED LOCKS (Cross-Service Coordination)                          │
+│  ──────────────────────────────────────────────────                        │
+│  • Redis SETNX / Redlock for distributed mutex                            │
+│  • ZooKeeper for coordination                                             │
+│  • Use when multiple services need to coordinate                          │
+│  • Careful: Distributed locks have their own failure modes!               │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  6. COMPENSATING TRANSACTIONS (Saga Pattern)                                │
+│  ───────────────────────────────────────────                               │
+│  • Don't try to prevent bad state, UNDO it if it happens                  │
+│  • Each step has a compensating action                                    │
+│  • Common in microservices (covered in Level 3)                           │
+│                                                                              │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  DECISION GUIDE:                                                            │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                    │    │
+│  │  Can you prevent with UNIQUE/CHECK constraint?                    │    │
+│  │    YES → Use constraint (fastest, no locks)                       │    │
+│  │    NO  ↓                                                          │    │
+│  │                                                                    │    │
+│  │  Can you redesign to avoid the conflict?                          │    │
+│  │    YES → Redesign (best long-term)                                │    │
+│  │    NO  ↓                                                          │    │
+│  │                                                                    │    │
+│  │  Is it a single hot row?                                          │    │
+│  │    YES → Redis/cache layer                                        │    │
+│  │    NO  ↓                                                          │    │
+│  │                                                                    │    │
+│  │  Is conflict rate high?                                           │    │
+│  │    YES → FOR UPDATE (pessimistic)                                 │    │
+│  │    NO  → Serializable or optimistic locking (retry on conflict)  │    │
+│  │                                                                    │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2.9 SQL vs NoSQL: Transaction & Concurrency Support
+
+> Now that you understand all the concepts (ACID, anomalies, locking, MVCC, isolation levels, pessimistic vs optimistic), let's see which databases support what!
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│           TRANSACTION SUPPORT: SQL vs NoSQL                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  This is CRITICAL for system design interviews!                             │
+│  Different databases offer different transaction guarantees.                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+| Database Type | ACID Transactions | Multi-Row Atomic | Isolation Levels | MVCC |
+|---------------|-------------------|------------------|------------------|------|
+| **PostgreSQL** | ✅ Full | ✅ Yes | All 4 levels | ✅ Yes |
+| **MySQL (InnoDB)** | ✅ Full | ✅ Yes | All 4 levels | ✅ Yes |
+| **SQL Server** | ✅ Full | ✅ Yes | All 4 levels | ✅ Yes (optional) |
+| **MongoDB** | ✅ Since 4.0 | ✅ Multi-doc txns | Snapshot only | ✅ Yes |
+| **DynamoDB** | ⚠️ Limited | ✅ TransactWriteItems | None (eventual/strong) | ❌ No |
+| **Cassandra** | ⚠️ Limited | ❌ Single partition | None (tunable consistency) | ❌ No |
+| **Redis** | ⚠️ MULTI/EXEC | ✅ Same connection | Serializable only | ❌ No |
+| **HBase** | ⚠️ Row-level | ❌ Single row | None | ✅ Yes |
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DETAILED BREAKDOWN                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SQL DATABASES (MySQL, PostgreSQL, SQL Server)                              │
+│  ─────────────────────────────────────────────                              │
+│  ✅ Full ACID transactions                                                  │
+│  ✅ Multi-table, multi-row transactions                                    │
+│  ✅ All isolation levels available                                         │
+│  ✅ Pessimistic locking (SELECT FOR UPDATE)                                │
+│  ✅ MVCC for non-blocking reads                                            │
+│  ✅ Constraints (FOREIGN KEY, UNIQUE, CHECK)                               │
+│                                                                              │
+│  USE WHEN: Financial systems, booking systems, any complex transactions    │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  MongoDB (Document Store)                                                   │
+│  ─────────────────────────                                                  │
+│  ✅ Single-document operations are atomic (always)                         │
+│  ✅ Multi-document transactions (since v4.0, 2018)                         │
+│  ✅ Snapshot isolation                                                      │
+│  ⚠️  Performance penalty for multi-doc transactions                        │
+│  ⚠️  60-second transaction limit                                            │
+│                                                                              │
+│  USE WHEN: Flexible schema, document-per-entity design                     │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  DynamoDB (Key-Value / Wide Column)                                         │
+│  ───────────────────────────────────                                        │
+│  ✅ Single-item operations are atomic                                       │
+│  ✅ TransactWriteItems: Up to 100 items across tables                      │
+│  ✅ ConditionExpression for optimistic locking (CAS)                       │
+│  ❌ No isolation levels (eventual or strong consistency choice)            │
+│  ❌ No MVCC (single version per item)                                      │
+│                                                                              │
+│  CONCURRENCY PATTERN:                                                       │
+│    UpdateItem with ConditionExpression = Optimistic Locking                │
+│    TransactWriteItems = Multi-item atomic (expensive, 2x cost)             │
+│                                                                              │
+│  USE WHEN: Massive scale, simple access patterns, can tolerate eventual    │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  Cassandra (Wide Column)                                                    │
+│  ───────────────────────                                                    │
+│  ✅ Single-partition operations are atomic                                  │
+│  ⚠️  Lightweight Transactions (LWT) for CAS - slow, use sparingly!         │
+│  ❌ No multi-partition transactions                                        │
+│  ❌ No isolation levels                                                     │
+│  ❌ Tunable consistency (ONE, QUORUM, ALL) ≠ isolation                     │
+│                                                                              │
+│  CONCURRENCY PATTERN:                                                       │
+│    Last-Write-Wins (default) - may lose updates!                           │
+│    LWT: IF column = expected_value (expensive, ~4x latency)                │
+│                                                                              │
+│  USE WHEN: Write-heavy, time-series, can tolerate LWW                      │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  Redis (In-Memory Key-Value)                                                │
+│  ───────────────────────────                                                │
+│  ✅ Single commands are atomic                                              │
+│  ✅ MULTI/EXEC for command batching (all-or-nothing)                       │
+│  ✅ WATCH for optimistic locking                                           │
+│  ✅ Lua scripts run atomically                                             │
+│  ❌ No multi-key transactions across slots (Cluster mode)                  │
+│                                                                              │
+│  CONCURRENCY PATTERN:                                                       │
+│    WATCH key; MULTI; ...; EXEC (abort if key changed)                      │
+│    INCRBY, LPUSH, etc. are atomic by themselves                            │
+│                                                                              │
+│  USE WHEN: Caching, counters, leaderboards, pub/sub                        │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Interview Quick Reference: Which Database for What?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              CHOOSING BASED ON TRANSACTION NEEDS                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  NEED FULL ACID TRANSACTIONS?                                               │
+│  ────────────────────────────                                               │
+│  YES → PostgreSQL, MySQL, MongoDB (4.0+)                                   │
+│  NO  → DynamoDB, Cassandra, Redis                                          │
+│                                                                              │
+│  NEED MULTI-ROW/MULTI-DOC ATOMICITY?                                        │
+│  ────────────────────────────────────                                       │
+│  YES → PostgreSQL, MySQL, MongoDB, DynamoDB (TransactWriteItems)           │
+│  NO  → Cassandra (single partition), Redis (single key), HBase             │
+│                                                                              │
+│  NEED SERIALIZABLE ISOLATION?                                               │
+│  ────────────────────────────                                               │
+│  YES → PostgreSQL (SSI), MySQL, SQL Server                                 │
+│  NO  → Most NoSQL (eventual consistency model)                             │
+│                                                                              │
+│  NEED HIGH WRITE THROUGHPUT + SCALE?                                        │
+│  ────────────────────────────────────                                       │
+│  YES → Cassandra, DynamoDB (accept weaker guarantees)                      │
+│  NO  → PostgreSQL, MySQL are fine                                          │
+│                                                                              │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  INTERVIEW PATTERN:                                                         │
+│  "For the payment processing part of the system, I'd use PostgreSQL        │
+│   because we need full ACID transactions with Serializable isolation.      │
+│   For the activity feed, I'd use Cassandra because it's write-heavy        │
+│   and eventual consistency is acceptable—we can tolerate a user            │
+│   briefly seeing stale data."                                              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2.10 Level 2 → Level 3 Connection
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│               FROM SINGLE-NODE TO DISTRIBUTED                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Everything in Level 2 assumed a SINGLE database server.                    │
+│                                                                              │
+│  LEVEL 3 (Distributed Systems) will cover:                                  │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  SINGLE-NODE (Level 2)         DISTRIBUTED (Level 3)               │   │
+│  │  ───────────────────────       ────────────────────                 │   │
+│  │  Local transaction IDs    →    Global timestamps (HLC, TrueTime)   │   │
+│  │  MVCC on one node         →    Distributed snapshots               │   │
+│  │  Local locks              →    Distributed locks (Paxos/Raft)      │   │
+│  │  ACID transactions        →    2PC, Saga pattern                   │   │
+│  │  Single-node isolation    →    CAP theorem trade-offs              │   │
+│  │  Write conflicts          →    Vector clocks, CRDTs                │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  The concepts you learned here (MVCC, isolation levels, locking)           │
+│  are the FOUNDATION. Distributed systems add coordination complexity!      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. Interview Checklist
 
 ### Questions You Should Be Able to Answer
 
-#### Indexing
-- [ ] "What's the difference between clustered and non-clustered indexes?"
-- [ ] "Why does column order matter in composite indexes?"
-- [ ] "When would an index hurt performance?"
-- [ ] "What is index selectivity and why does it matter?"
-- [ ] "How do covering indexes avoid heap lookups?"
+#### Transactions & Concurrency
+- [ ] "What is a transaction and what does ACID stand for?"
+- [ ] "What is the Lost Update problem and how do you prevent it?"
+- [ ] "What's the difference between pessimistic and optimistic locking?"
+- [ ] "When would you use SELECT...FOR UPDATE?"
 
 #### MVCC
 - [ ] "How do readers and writers avoid blocking each other?"
@@ -1334,14 +3434,43 @@ Serializable for financial transfers to prevent write skew."
 - [ ] "Why might Serializable cause more transaction retries?"
 - [ ] "What isolation level would you use for a banking application?"
 
-### Quick Reference Table
+#### Famous Problems (Section 2.8)
+- [ ] "How would you implement a bank transfer atomically?"
+- [ ] "How do you prevent overselling during a flash sale?"
+- [ ] "How would you prevent double-booking a flight seat?"
+- [ ] "Explain the on-call doctors problem and how to solve it"
+- [ ] "When would you use database constraints vs isolation levels?"
+
+#### Indexing
+- [ ] "What's the difference between clustered and non-clustered indexes?"
+- [ ] "Why does column order matter in composite indexes?"
+- [ ] "When would an index hurt performance?"
+- [ ] "What is index selectivity and why does it matter?"
+- [ ] "How do covering indexes avoid heap lookups?"
+
+### Quick Reference: Concurrency Anomalies
 
 | Anomaly | Read Uncommitted | Read Committed | Repeatable Read | Serializable |
 |---------|------------------|----------------|-----------------|--------------|
 | Dirty Read | ❌ Possible | ✅ Prevented | ✅ Prevented | ✅ Prevented |
 | Non-Repeatable Read | ❌ Possible | ❌ Possible | ✅ Prevented | ✅ Prevented |
 | Phantom Read | ❌ Possible | ❌ Possible | ⚠️ Varies | ✅ Prevented |
+| Lost Update | ❌ Possible | ❌ Possible | ✅* Prevented | ✅ Prevented |
 | Write Skew | ❌ Possible | ❌ Possible | ❌ Possible | ✅ Prevented |
+
+*With explicit locking (SELECT...FOR UPDATE)
+
+### Quick Reference: Pessimistic vs Optimistic
+
+> For Famous Problems quick reference, see **Section 2.8**.
+
+| Aspect | Pessimistic | Optimistic |
+|--------|-------------|------------|
+| Philosophy | "Conflicts WILL happen" | "Conflicts are RARE" |
+| Mechanism | Lock before accessing | Check version at commit |
+| Blocking | Yes (others wait) | No (retry on conflict) |
+| Best for | High contention | Low contention |
+| Example | Flash sale inventory | User profile updates |
 
 ### Common Pitfalls
 
@@ -1351,6 +3480,8 @@ Serializable for financial transfers to prevent write skew."
 | "MVCC means no locks" | Writes still lock | Writers don't block readers |
 | "Repeatable Read prevents all issues" | Write skew still possible | Need Serializable for full isolation |
 | "Serializable is always safest" | Can cause performance issues | Right isolation for the use case |
+| "Optimistic is always better" | High conflict rate = endless retries | Choose based on contention level |
+| "Just retry on conflict" | May cause livelock | Add backoff, limit retries |
 
 ---
 
