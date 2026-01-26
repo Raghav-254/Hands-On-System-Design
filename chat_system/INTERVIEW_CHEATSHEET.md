@@ -1253,4 +1253,20 @@ CREATE TABLE friendships (
 
 ---
 
+## 📚 Database Fundamentals Cross-Reference
+
+For deeper understanding of the database concepts used in this system, see:
+
+| Concept Used Here | Deep Dive Link |
+|-------------------|----------------|
+| **Cassandra partitioning** (user_id, channel_id) | [NoSQL Indexing: Partition Key & Clustering Key](../database_fundamentals/02_DATABASE_LOGIC.md#nosql-indexing-partition-key-clustering-key--secondary-indexes) |
+| **Kafka ordering & partitions** | [Kafka Architecture](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#kafka-event-streaming) |
+| **WebSocket reconnection & message sync** | [Real-Time Updates](../database_fundamentals/04_REALTIME_UPDATES.md) |
+| **Replication & consistency** | [Replication Strategies](../database_fundamentals/03_DISTRIBUTED_SYSTEMS.md#2-replication-strategies) |
+| **Message ordering guarantees** | [Conflict Resolution](../database_fundamentals/03_DISTRIBUTED_SYSTEMS.md#5-conflict-resolution--anti-entropy) |
+| **Redis for presence/caching** | [Redis Deep Dive](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#redis-cache--more) |
+| **Idempotency keys** | [Senior Gotchas: Idempotency](../database_fundamentals/06_SENIOR_GOTCHAS.md) |
+
+---
+
 *Good luck with your interview! 🎯*

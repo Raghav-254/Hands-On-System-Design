@@ -1096,5 +1096,21 @@ Model: Predict probability of engagement
 
 ---
 
+## 📚 Database Fundamentals Cross-Reference
+
+For deeper understanding of the database concepts used in this system, see:
+
+| Concept Used Here | Deep Dive Link |
+|-------------------|----------------|
+| **Fan-out on write vs read** | [Fan-out Patterns](../database_fundamentals/04_REALTIME_UPDATES.md#fan-out-patterns) |
+| **Redis sorted sets for feeds** | [Redis Deep Dive](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#redis-cache--more) |
+| **Kafka for async processing** | [Kafka Architecture](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#kafka-event-streaming) |
+| **MySQL for posts/users** | [PostgreSQL/MySQL](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#postgresqlmysql-relational) |
+| **Cache invalidation patterns** | [Caching Patterns](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#redis-cache--more) |
+| **Celebrity problem (hot keys)** | [The Hotspot Problem](../database_fundamentals/03_DISTRIBUTED_SYSTEMS.md#the-hotspot-problem) |
+| **Read/Write path optimization** | [B-Tree vs LSM-Tree](../database_fundamentals/01_STORAGE_INTERNALS.md) |
+
+---
+
 *Good luck with your interview! 🎯*
 

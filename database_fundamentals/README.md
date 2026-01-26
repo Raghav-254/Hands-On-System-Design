@@ -216,5 +216,21 @@ When asked "Design X", structure your database discussion as:
 
 ---
 
+---
+
+## 🔗 Related System Designs
+
+These database concepts are applied in the following system design cheatsheets:
+
+| System | Key Database Concepts Used |
+|--------|---------------------------|
+| [Chat System](../chat_system/INTERVIEW_CHEATSHEET.md) | Cassandra (partition keys), Kafka, WebSockets, Message ordering |
+| [News Feed System](../news_feed_system/INTERVIEW_CHEATSHEET.md) | Fan-out, Redis caching, Kafka, Read/Write paths |
+| [Google Drive](../google_drive_system/INTERVIEW_CHEATSHEET.md) | Blob storage (S3), MySQL metadata, CDC for sync |
+| [Video Streaming](../video_streaming_system/INTERVIEW_CHEATSHEET.md) | CDN, Blob storage, Metadata DB, Caching patterns |
+| [Autocomplete](../autocomplete_system/INTERVIEW_CHEATSHEET.md) | Redis/DynamoDB, Sharding, In-memory data structures |
+
+---
+
 *Created for system design interview preparation. Each file is self-contained but builds on previous concepts.*
 

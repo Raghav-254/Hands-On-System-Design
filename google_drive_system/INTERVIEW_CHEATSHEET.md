@@ -1603,5 +1603,21 @@ For large files that are frequently edited, uploading the entire file is wastefu
 
 ---
 
+## 📚 Database Fundamentals Cross-Reference
+
+For deeper understanding of the database concepts used in this system, see:
+
+| Concept Used Here | Deep Dive Link |
+|-------------------|----------------|
+| **S3/Blob storage** | [Blob/Object Storage](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#4-bloboject-storage) |
+| **MySQL for metadata** | [PostgreSQL/MySQL](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#postgresqlmysql-relational) |
+| **Redis for caching** | [Redis Deep Dive](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#redis-cache--more) |
+| **Long polling for sync** | [WebSockets vs SSE](../database_fundamentals/04_REALTIME_UPDATES.md#websockets-vs-sse) |
+| **Versioning & conflict resolution** | [Conflict Resolution](../database_fundamentals/03_DISTRIBUTED_SYSTEMS.md#5-conflict-resolution--anti-entropy) |
+| **CDC for notifications** | [Change Data Capture](../database_fundamentals/04_REALTIME_UPDATES.md#change-data-capture-cdc) |
+| **Connection pooling** | [Connection Pooling](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#postgresqlmysql-relational) |
+
+---
+
 **For hands-on code, run:** `mvn compile exec:java`
 

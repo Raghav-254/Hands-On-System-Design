@@ -1195,5 +1195,21 @@ Based on Alex Xu's System Design Interview - Chapter 14
 
 ---
 
+## 📚 Database Fundamentals Cross-Reference
+
+For deeper understanding of the database concepts used in this system, see:
+
+| Concept Used Here | Deep Dive Link |
+|-------------------|----------------|
+| **S3/Blob storage for videos** | [Blob/Object Storage](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#4-bloboject-storage) |
+| **MySQL/Postgres for metadata** | [PostgreSQL/MySQL](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#postgresqlmysql-relational) |
+| **Redis for metadata caching** | [Redis Deep Dive](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#redis-cache--more) |
+| **CDN and caching patterns** | [Caching Patterns](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#redis-cache--more) |
+| **Kafka for async processing** | [Kafka Architecture](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#kafka-event-streaming) |
+| **Read-heavy workload optimization** | [B-Tree vs LSM-Tree](../database_fundamentals/01_STORAGE_INTERNALS.md) |
+| **Database indexing for queries** | [Indexing Strategies](../database_fundamentals/02_DATABASE_LOGIC.md#1-indexing-strategies) |
+
+---
+
 **For hands-on code, run:** `mvn compile exec:java`
 

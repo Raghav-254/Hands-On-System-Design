@@ -16,6 +16,14 @@ This repository contains hands-on implementations of popular system design probl
 | 4 | [Video Streaming System](./video_streaming_system/) | YouTube-like video platform | Pre-signed URL, DAG Pipeline, CDN, Adaptive Bitrate | [View](./video_streaming_system/INTERVIEW_CHEATSHEET.md) |
 | 5 | [Google Drive System](./google_drive_system/) | Dropbox/Google Drive file sync | Block Server, Delta Sync, Deduplication, Versioning | [View](./google_drive_system/INTERVIEW_CHEATSHEET.md) |
 
+### 📖 Database Fundamentals
+
+| # | Topic | Description | Deep Dive |
+|---|-------|-------------|-----------|
+| 📚 | [Database Fundamentals](./database_fundamentals/) | Master guide bridging database theory with system design | [View Guide](./database_fundamentals/README.md) |
+
+Covers: **Storage Internals** (B-Tree, LSM-Tree, WAL) → **Database Logic** (Indexing, MVCC, Transactions) → **Distributed Systems** (Replication, Sharding, CAP) → **Real-Time Updates** (CDC, WebSockets) → **Architectural Mapping** (When to use what)
+
 ---
 
 ## 🎯 How to Use This Repo
@@ -84,6 +92,16 @@ Token Bucket / Sliding Window → Reject excess requests
 Hands on System Design/
 ├── README.md                    ← You are here (main entry point)
 ├── .gitignore                   ← Git ignore for all projects
+│
+├── database_fundamentals/       ← 📚 DATABASE THEORY DEEP DIVE (NEW!)
+│   ├── README.md                   Master guide overview
+│   ├── 01_STORAGE_INTERNALS.md     B-Tree, LSM-Tree, WAL, Buffer Pool
+│   ├── 02_DATABASE_LOGIC.md        Indexing, MVCC, Transactions
+│   ├── 03_DISTRIBUTED_SYSTEMS.md   Replication, Sharding, CAP
+│   ├── 04_REALTIME_UPDATES.md      CDC, WebSockets, Fan-out
+│   ├── 05_ARCHITECTURAL_MAPPING.md When to use which database
+│   ├── 06_SENIOR_GOTCHAS.md        Edge cases for Staff+ prep
+│   └── QUICK_REFERENCE_CARD.md     1-page cheatsheet
 │
 ├── chat_system/                 ← Chat System
 │   ├── README.md

@@ -998,3 +998,23 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 | **Trie rebuild fails** | Continue using old trie | Rollback capability, alerting |
 | **Kafka down** | No new query logging | Kafka cluster, local buffer |
 
+---
+
+## 📚 Database Fundamentals Cross-Reference
+
+For deeper understanding of the database concepts used in this system, see:
+
+| Concept Used Here | Deep Dive Link |
+|-------------------|----------------|
+| **Redis/DynamoDB for Trie storage** | [Redis Deep Dive](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#redis-cache--more) |
+| **Sharding by prefix** | [Sharding Strategies](../database_fundamentals/03_DISTRIBUTED_SYSTEMS.md#3-sharding-strategies) |
+| **Kafka for analytics logging** | [Kafka Architecture](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#kafka-event-streaming) |
+| **Hot-spot problem (popular prefixes)** | [The Hotspot Problem](../database_fundamentals/03_DISTRIBUTED_SYSTEMS.md#the-hotspot-problem) |
+| **In-memory data structures** | [Buffer Pool & Memory](../database_fundamentals/01_STORAGE_INTERNALS.md) |
+| **Caching patterns** | [Caching Patterns](../database_fundamentals/05_ARCHITECTURAL_MAPPING.md#redis-cache--more) |
+| **Replication for availability** | [Replication Strategies](../database_fundamentals/03_DISTRIBUTED_SYSTEMS.md#2-replication-strategies) |
+
+---
+
+*Good luck with your interview! 🎯*
+
