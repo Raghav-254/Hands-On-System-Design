@@ -50,24 +50,33 @@
 ---
 
 ## Table of Contents
-1. [Indexing Deep Dive](#1-indexing-deep-dive) (SQL Focus)
-   - Clustered vs Non-Clustered
-   - Composite, Covering, Selectivity
-2. [NoSQL Indexing](#nosql-indexing-partition-key-clustering-key--secondary-indexes)
+
+**1. [Indexing Deep Dive](#1-indexing-deep-dive)** (SQL Focus)
+   - [Clustered vs Non-Clustered Indexes](#clustered-vs-non-clustered-indexes)
+   - [Composite Indexes](#composite-indexes-multi-column)
+   - [Index Selectivity](#index-selectivity)
+   - [Covering Indexes](#covering-indexes-index-only-scans)
+
+**2. [NoSQL Indexing](#nosql-indexing-partition-key-clustering-key--secondary-indexes)**
    - Partition Key vs Clustering Key
    - Secondary Indexes (Local & Global)
-3. [Transactions & Concurrency Control](#2-transactions--concurrency-control)
-   - 2.1 What is a Transaction? (ACID)
-   - 2.2 Concurrency Anomalies
-   - 2.3 Locking (Database Mechanism)
-   - 2.4 MVCC (Multi-Version Concurrency Control)
-   - 2.5 Isolation Levels
-   - 2.6 How It All Ties Together ← Connect the concepts!
-   - 2.7 Pessimistic vs Optimistic Locking
-   - 2.8 Famous Concurrency Problems & Solutions ← Interview Gold!
-   - 2.9 SQL vs NoSQL: Transaction Support
-   - 2.10 Level 2 → Level 3 Connection
-4. [Interview Checklist](#3-interview-checklist)
+
+**3. [Transactions & Concurrency Control](#2-transactions--concurrency-control)**
+   - [2.1 What is a Transaction?](#21-what-is-a-transaction) (ACID)
+   - [2.2 Concurrency Anomalies](#22-what-can-go-wrong-concurrency-anomalies)
+   - [2.3 Locking](#23-the-naive-solution-locking)
+   - [2.4 MVCC](#24-the-clever-solution-mvcc-multi-version-concurrency-control)
+   - [2.5 Isolation Levels](#25-isolation-levels-choosing-your-protection)
+   - [2.6 How It All Ties Together](#26--how-it-all-ties-together) ← Connect the concepts!
+   - [2.7 Pessimistic vs Optimistic Locking](#27-pessimistic-vs-optimistic-locking)
+   - [2.8 Famous Concurrency Problems](#28-famous-concurrency-problems--solutions-interview-gold) ← Interview Gold!
+   - [2.9 SQL vs NoSQL: Transaction Support](#29-sql-vs-nosql-transaction--concurrency-support)
+   - [2.10 Level 2 → Level 3 Connection](#210-level-2--level-3-connection)
+
+**4. [Interview Checklist](#3-interview-checklist)**
+   - [Quick Reference: Concurrency Anomalies](#quick-reference-concurrency-anomalies)
+   - [Quick Reference: Pessimistic vs Optimistic](#quick-reference-pessimistic-vs-optimistic)
+   - [Common Pitfalls](#common-pitfalls)
 
 ---
 
