@@ -40,6 +40,27 @@
    • In-flight messages may be lost
    • Client should track last received message ID
    • Request missed messages on reconnect
+   
+   WHERE TO GET MISSED MESSAGES FROM?
+   ┌─────────────────────────────────────────────────────────────────┐
+   │  Option 1: Redis Message Buffer                                │
+   │  • Store last N messages per user/channel in Redis List        │
+   │  • On reconnect: Client sends lastMessageId                    │
+   │  • Server replays messages after that ID from Redis            │
+   │                                                                 │
+   │  Option 2: Database (for persistence)                          │
+   │  • Messages stored in DB with timestamp/sequence               │
+   │  • On reconnect: Query messages WHERE id > lastMessageId       │
+   │                                                                 │
+   │  Option 3: Kafka (for ordered replay)                          │
+   │  • Messages persisted in Kafka topic                           │
+   │  • On reconnect: Consumer seeks to last offset + 1             │
+   └─────────────────────────────────────────────────────────────────┘
+   
+   COMMON PATTERN:
+   • Real-time delivery: Redis Pub/Sub (ephemeral)
+   • Missed messages: Redis List or Database (persistent)
+   • Never rely on WebSocket server memory!
 
 4. GRACEFUL SHUTDOWN
    • Drain connections before shutdown
@@ -144,7 +165,52 @@
       • Clients cached old primary address
       • Continue sending to dead/old primary
       
-      SOLUTION: Short DNS TTL, connection retry logic
+      SOLUTION: ZooKeeper + Load Balancer (they do DIFFERENT things!)
+      
+      ┌─────────────────────────────────────────────────────────────────┐
+      │  ZOOKEEPER / etcd / Consul = SERVICE DISCOVERY                 │
+      │  "Which instances exist and are healthy?"                      │
+      │                                                                 │
+      │  • Services REGISTER themselves on startup                     │
+      │    → "I am order-service-3 at IP 10.0.0.5, I'm alive!"        │
+      │  • Health checks detect dead instances                         │
+      │  • WATCH mechanism for instant notifications                   │
+      │                                                                 │
+      ├─────────────────────────────────────────────────────────────────┤
+      │  LOAD BALANCER = TRAFFIC DISTRIBUTION                          │
+      │  "Which of the 5 healthy instances should handle this request?"│
+      │                                                                 │
+      │  • Distributes requests across instances                       │
+      │  • Algorithms: Round-robin, Least connections, Weighted        │
+      │  • L4 (TCP) or L7 (HTTP) load balancing                       │
+      │                                                                 │
+      ├─────────────────────────────────────────────────────────────────┤
+      │  HOW THEY WORK TOGETHER:                                       │
+      │                                                                 │
+      │  ┌──────────┐     ┌──────────┐     ┌──────────────────────┐   │
+      │  │ Service  │────►│ZooKeeper │◄────│   Load Balancer      │   │
+      │  │Instances │     │(registry)│     │                      │   │
+      │  │ register │     │          │     │ "Give me list of     │   │
+      │  │themselves│     │          │     │  healthy instances"  │   │
+      │  └──────────┘     └──────────┘     └──────────────────────┘   │
+      │                                              │                 │
+      │                                              ▼                 │
+      │                   ┌────────────────────────────────────────┐   │
+      │                   │  Client request → LB → one of 5       │   │
+      │                   │  healthy instances (round-robin, etc.) │   │
+      │                   └────────────────────────────────────────┘   │
+      │                                                                 │
+      │  EXAMPLE FLOW:                                                 │
+      │  1. 5 instances of order-service register in ZooKeeper        │
+      │  2. Instance-3 crashes, ZK detects via health check           │
+      │  3. ZK removes instance-3 from registry                       │
+      │  4. LB refreshes list from ZK, now routes to 4 instances      │
+      │  5. Clients never notice (LB handles it!)                     │
+      │                                                                 │
+      └─────────────────────────────────────────────────────────────────┘
+      
+      TL;DR: ZooKeeper = "who is available?"
+             Load Balancer = "distribute traffic to available ones"
    
    D. REPLICATION LAG VISIBILITY
       • New primary was behind
@@ -204,6 +270,45 @@
 
    CAUSE: Connection leak in application
    FIX: Use try-finally or context managers, connection timeout
+   
+   ┌─────────────────────────────────────────────────────────────────┐
+   │  WHAT IS A CONNECTION LEAK?                                    │
+   │                                                                 │
+   │  = A connection is borrowed from pool but NEVER returned       │
+   │                                                                 │
+   │  HOW IT HAPPENS:                                                │
+   │  ┌───────────────────────────────────────────────────────────┐ │
+   │  │  conn = pool.getConnection();   // Borrow connection      │ │
+   │  │  result = conn.query("SELECT..."); // Do work             │ │
+   │  │  // EXCEPTION THROWN HERE! 💥                             │ │
+   │  │  conn.close();  // ← This line NEVER runs!                │ │
+   │  │                                                           │ │
+   │  │  // Connection is now "leaked" - pool thinks it's in use  │ │
+   │  │  // but no one will ever return it                        │ │
+   │  └───────────────────────────────────────────────────────────┘ │
+   │                                                                 │
+   │  CONSEQUENCE:                                                   │
+   │  • Pool has 100 connections max                                │
+   │  • Leak 1 connection per request                               │
+   │  • After 100 requests → pool exhausted!                        │
+   │  • New requests wait forever for a connection → app hangs     │
+   │                                                                 │
+   │  FIX: Always use try-finally or context managers               │
+   │  ┌───────────────────────────────────────────────────────────┐ │
+   │  │  # Python example                                         │ │
+   │  │  with pool.getConnection() as conn:  # Auto-closes!      │ │
+   │  │      result = conn.query("SELECT...")                     │ │
+   │  │  # Connection returned even if exception occurs           │ │
+   │  │                                                           │ │
+   │  │  // Java example                                          │ │
+   │  │  try (Connection conn = pool.getConnection()) {           │ │
+   │  │      // Auto-closes in finally                            │ │
+   │  │  }                                                        │ │
+   │  └───────────────────────────────────────────────────────────┘ │
+   │                                                                 │
+   │  NOT ABOUT THREADS: It's about connection OBJECTS.             │
+   │  (Though each connection may also consume a thread in some DBs)│
+   └─────────────────────────────────────────────────────────────────┘
 
    CAUSE: Pool too small for load
    FIX: Increase pool size (but not too much—DB has limits!)
@@ -390,6 +495,60 @@ ANSWER FRAMEWORK:
       • Client generates unique request ID
       • Server deduplicates by ID
       • Store processed IDs in DB (with TTL cleanup)
+      
+      ┌─────────────────────────────────────────────────────────────────┐
+      │  WHAT IS AN IDEMPOTENCY KEY?                                   │
+      │                                                                 │
+      │  = A unique ID sent by client to prevent duplicate processing  │
+      │                                                                 │
+      │  EXAMPLE: Payment API                                          │
+      │  ───────────────────────────────────────────────────────────── │
+      │                                                                 │
+      │  Request:                                                       │
+      │  POST /api/payments                                             │
+      │  Headers:                                                       │
+      │    Idempotency-Key: pay_a1b2c3d4e5f6    ← Client generates     │
+      │  Body:                                                          │
+      │    { "amount": 100, "to": "merchant_123" }                     │
+      │                                                                 │
+      │  ───────────────────────────────────────────────────────────── │
+      │                                                                 │
+      │  SCENARIO: Network timeout, client retries                     │
+      │                                                                 │
+      │  1. User clicks "Pay $100"                                     │
+      │  2. Request sent with key: pay_a1b2c3d4e5f6                   │
+      │  3. Server processes payment ✅                                │
+      │  4. Network timeout - client never gets response! 😱           │
+      │  5. Client retries with SAME key: pay_a1b2c3d4e5f6            │
+      │  6. Server checks: "Already processed this key"               │
+      │  7. Server returns CACHED response (no re-processing!)        │
+      │  8. User charged only ONCE ✅                                  │
+      │                                                                 │
+      │  ───────────────────────────────────────────────────────────── │
+      │                                                                 │
+      │  SERVER LOGIC:                                                  │
+      │  ┌───────────────────────────────────────────────────────────┐ │
+      │  │  def process_payment(idempotency_key, amount):            │ │
+      │  │      # Check if already processed                         │ │
+      │  │      existing = db.get(f"idem:{idempotency_key}")         │ │
+      │  │      if existing:                                         │ │
+      │  │          return existing  # Return cached result          │ │
+      │  │                                                           │ │
+      │  │      # Process new request                                │ │
+      │  │      result = charge_user(amount)                         │ │
+      │  │                                                           │ │
+      │  │      # Store result with TTL (e.g., 24 hours)             │ │
+      │  │      db.set(f"idem:{idempotency_key}", result, ttl=86400) │ │
+      │  │      return result                                        │ │
+      │  └───────────────────────────────────────────────────────────┘ │
+      │                                                                 │
+      │  KEY FORMAT EXAMPLES:                                          │
+      │  • UUID: 550e8400-e29b-41d4-a716-446655440000                  │
+      │  • Stripe style: req_abc123xyz                                 │
+      │  • Custom: {user_id}_{action}_{timestamp}_{random}             │
+      │                                                                 │
+      │  USED BY: Stripe, PayPal, AWS, most payment/financial APIs    │
+      └─────────────────────────────────────────────────────────────────┘
    
    C. TRANSACTIONAL OUTBOX
       • Write to DB + outbox in same transaction
