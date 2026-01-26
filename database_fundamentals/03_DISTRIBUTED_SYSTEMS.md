@@ -115,6 +115,7 @@
    - [Consensus Use Cases](#consensus-use-cases)
    - [Distributed Locks vs Database Locks](#distributed-locks-vs-database-locks)
    - [Fencing Tokens](#fencing-tokens-preventing-zombie-leaders)
+   - [Distributed Transactions: 2PC vs Saga](#distributed-transactions-2pc-vs-saga)
 
 5. [Conflict Resolution & Anti-Entropy](#5-conflict-resolution--anti-entropy)
    - **Part 1: Write Conflicts**
@@ -1132,6 +1133,166 @@ With consensus (Raft/Paxos):
 │  2. STORAGE must check the token and reject old ones                       │
 │  3. ZooKeeper's zxid, Raft's term, Kafka's epoch are all fencing tokens   │
 │  4. Without fencing tokens, you get split-brain (two leaders)              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Distributed Transactions: 2PC vs Saga
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DISTRIBUTED TRANSACTIONS                                  │
+│         "How to update multiple services/databases atomically?"             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  PROBLEM: Order service needs to:                                           │
+│  1. Deduct inventory (Inventory DB)                                         │
+│  2. Charge payment (Payment Service)                                        │
+│  3. Create order (Order DB)                                                 │
+│                                                                              │
+│  If step 2 fails, step 1 must be rolled back! How?                         │
+│                                                                              │
+│  TWO APPROACHES:                                                            │
+│  ═══════════════════════════════════════════════════════════════════════════│
+│                                                                              │
+│  1. TWO-PHASE COMMIT (2PC) - Strong consistency, blocking                  │
+│  2. SAGA PATTERN - Eventual consistency, non-blocking                      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    TWO-PHASE COMMIT (2PC)                                    │
+│         "All-or-nothing across multiple nodes"                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  PHASE 1: PREPARE (Voting)                                                  │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  Coordinator ──► "Can you commit?" ──► Participant A                       │
+│              ──► "Can you commit?" ──► Participant B                       │
+│                                                                              │
+│  Participants:                                                              │
+│  • Lock resources                                                           │
+│  • Write to local WAL                                                       │
+│  • Reply YES (prepared) or NO (abort)                                      │
+│                                                                              │
+│  PHASE 2: COMMIT (Decision)                                                 │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  If ALL said YES:                                                           │
+│     Coordinator ──► "COMMIT" ──► All participants commit                   │
+│                                                                              │
+│  If ANY said NO:                                                            │
+│     Coordinator ──► "ABORT" ──► All participants rollback                  │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  Coordinator        Inventory DB       Payment         Order DB    │   │
+│  │      │                  │                │                │         │   │
+│  │      │── PREPARE ──────►│                │                │         │   │
+│  │      │── PREPARE ───────────────────────►│                │         │   │
+│  │      │── PREPARE ────────────────────────────────────────►│         │   │
+│  │      │                  │                │                │         │   │
+│  │      │◄── YES ──────────│                │                │         │   │
+│  │      │◄── YES ───────────────────────────│                │         │   │
+│  │      │◄── YES ────────────────────────────────────────────│         │   │
+│  │      │                  │                │                │         │   │
+│  │      │── COMMIT ───────►│                │                │         │   │
+│  │      │── COMMIT ────────────────────────►│                │         │   │
+│  │      │── COMMIT ─────────────────────────────────────────►│         │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  ✅ PROS: Strong consistency (ACID across nodes)                           │
+│  ❌ CONS:                                                                   │
+│     • BLOCKING: Locks held during entire protocol                          │
+│     • Coordinator is SPOF (if crashes during phase 2, participants stuck)  │
+│     • High latency (2 network round-trips minimum)                         │
+│     • Doesn't scale well (all participants must be available)              │
+│                                                                              │
+│  USED BY: Traditional databases, XA transactions, some NewSQL              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SAGA PATTERN                                              │
+│         "Sequence of local transactions with compensating actions"          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  IDEA: Break distributed transaction into local transactions.              │
+│  If one fails, execute COMPENSATING TRANSACTIONS to undo previous steps.   │
+│                                                                              │
+│  EXAMPLE: Order Saga                                                        │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                                                                     │   │
+│  │  HAPPY PATH:                                                        │   │
+│  │                                                                     │   │
+│  │  T1: Reserve Inventory ──► T2: Charge Payment ──► T3: Create Order │   │
+│  │                                                                     │   │
+│  │  FAILURE (Payment fails):                                          │   │
+│  │                                                                     │   │
+│  │  T1: Reserve Inventory ──► T2: Charge Payment ✗                    │   │
+│  │           │                       │                                 │   │
+│  │           │◄──── C1: Release ◄────┘                                │   │
+│  │                  Inventory                                          │   │
+│  │                                                                     │   │
+│  │  Each step has a COMPENSATING action:                              │   │
+│  │  T1: Reserve Inventory  →  C1: Release Inventory                   │   │
+│  │  T2: Charge Payment     →  C2: Refund Payment                      │   │
+│  │  T3: Create Order       →  C3: Cancel Order                        │   │
+│  │                                                                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│  TWO COORDINATION STYLES:                                                   │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│                                                                              │
+│  CHOREOGRAPHY: Services emit events, others react                          │
+│  • Order → "InventoryReserved" → Payment → "PaymentCharged" → ...         │
+│  • No central coordinator, but complex to track                            │
+│                                                                              │
+│  ORCHESTRATION: Central saga orchestrator directs each step                │
+│  • Orchestrator calls each service in sequence                             │
+│  • Easier to understand, single point to monitor                           │
+│                                                                              │
+│  ✅ PROS:                                                                   │
+│     • Non-blocking (no long-held locks)                                    │
+│     • Better availability (services can be temporarily down)               │
+│     • Scales better than 2PC                                               │
+│                                                                              │
+│  ❌ CONS:                                                                   │
+│     • Eventual consistency (not ACID)                                      │
+│     • Complex to implement (compensating logic)                            │
+│     • Harder to debug                                                      │
+│                                                                              │
+│  USED BY: Microservices, e-commerce, booking systems                       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    2PC vs SAGA: WHEN TO USE                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────┬─────────────────────┬────────────────────────────────┐│
+│  │ Aspect          │ 2PC                 │ Saga                           ││
+│  ├─────────────────┼─────────────────────┼────────────────────────────────┤│
+│  │ Consistency     │ Strong (ACID)       │ Eventual                       ││
+│  │ Availability    │ Lower (blocking)    │ Higher (non-blocking)          ││
+│  │ Latency         │ Higher (2 RTTs)     │ Lower (async possible)         ││
+│  │ Complexity      │ Protocol is complex │ Compensation logic is complex  ││
+│  │ Scale           │ Limited             │ Better                         ││
+│  │ Isolation       │ Yes (locks)         │ No (dirty reads possible)      ││
+│  └─────────────────┴─────────────────────┴────────────────────────────────┘│
+│                                                                              │
+│  USE 2PC WHEN:                                                              │
+│  • Strong consistency is mandatory (financial transactions)                │
+│  • Few participants, low latency requirements                              │
+│  • Within a single database cluster (not across microservices)            │
+│                                                                              │
+│  USE SAGA WHEN:                                                             │
+│  • High availability is priority                                           │
+│  • Microservices architecture                                              │
+│  • Can tolerate eventual consistency                                       │
+│  • Long-running transactions (minutes/hours)                               │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
