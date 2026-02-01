@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.proximity</groupId>
+    <artifactId>proximity-service</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>Proximity Service</name>
+    <description>
+        A location-based service (LBS) implementation demonstrating:
+        - Geospatial indexing with Geohash
+        - Nearby business search
+        - Quadtree-based spatial indexing
+        - Read-heavy system optimization
+        Based on Chapter 1 of "System Design Interview Volume 2" by Alex Xu
+    </description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- In production, you would use:
+             - Redis (Jedis/Lettuce) for caching and geospatial queries
+             - MySQL/PostgreSQL with spatial extensions
+             - Elasticsearch for full-text + geo search
+        -->
+    </dependencies>
+</project>
