@@ -15,6 +15,7 @@ This repository contains hands-on implementations of popular system design probl
 | 3 | [Autocomplete System](./autocomplete_system/) | Google/Amazon search suggestions | Trie, Top-K Caching, Sharding | [View](./autocomplete_system/INTERVIEW_CHEATSHEET.md) |
 | 4 | [Video Streaming System](./video_streaming_system/) | YouTube-like video platform | Pre-signed URL, DAG Pipeline, CDN, Adaptive Bitrate | [View](./video_streaming_system/INTERVIEW_CHEATSHEET.md) |
 | 5 | [Google Drive System](./google_drive_system/) | Dropbox/Google Drive file sync | Block Server, Delta Sync, Deduplication, Versioning | [View](./google_drive_system/INTERVIEW_CHEATSHEET.md) |
+| 6 | [Proximity Service](./proximity_service/) | Yelp/Google Maps nearby search | Geohash, QuadTree, Spatial Indexing, LBS | [View](./proximity_service/INTERVIEW_CHEATSHEET.md) |
 
 ### 📖 Database Fundamentals
 
@@ -84,6 +85,13 @@ Token Bucket / Sliding Window → Reject excess requests
 ```
 **Used in:** API protection, DDoS prevention, Fair usage
 
+### Pattern 7: Geospatial Indexing
+```
+Geohash: Encode (lat, lon) → string prefix → SQL index
+QuadTree: Hierarchical 4-way split → in-memory search
+```
+**Used in:** Nearby search, Maps, Delivery apps, Ride sharing
+
 ---
 
 ## 📂 Repository Structure
@@ -128,6 +136,11 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── proximity_service/           ← Proximity Service (Yelp/Maps)
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
 ├── (url_shortener)/             ← Coming soon
 └── ...
@@ -144,6 +157,7 @@ Hands on System Design/
 | Search Autocomplete | Trie, Top-K Caching, Sharding, Data Pipeline | ✅ Complete |
 | Video Streaming | Pre-signed URL, DAG Pipeline, CDN, Adaptive Bitrate | ✅ Complete |
 | Google Drive | Block Server, Delta Sync, Deduplication, Versioning | ✅ Complete |
+| Proximity Service | Geohash, QuadTree, Spatial Indexing, LBS | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
 | URL Shortener | Base62 encoding, Caching, Analytics, Redirection | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
