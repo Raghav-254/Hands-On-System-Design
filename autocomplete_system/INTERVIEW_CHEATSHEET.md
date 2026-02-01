@@ -844,6 +844,17 @@ Where: p = prefix length, c = total chars under prefix, n = word length, k = top
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
+**Caching Strategy: Nightly Batch Refresh**
+
+| Strategy | How it Works | Reasoning |
+|----------|--------------|-----------|
+| **Batch Refresh** | Weekly job rebuilds Trie from aggregated data → pushes to cache | Search trends change slowly |
+
+**Why NOT Cache-Aside or Write-Through?**
+- Trie is built from aggregated analytics (not individual writes)
+- Real-time updates not needed (yesterday's trends are fine)
+- Weekly batch rebuild is simpler and more efficient
+
 ### Why Kafka for Analytics Logs?
 
 ```

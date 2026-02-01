@@ -230,6 +230,18 @@ Based on Alex Xu's System Design Interview - Chapter 15
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
+### Caching Strategy: Cache-Aside
+
+| Cache | Strategy | Reasoning |
+|-------|----------|-----------|
+| **Metadata Cache** | Cache-Aside | Read on miss, invalidate on file update |
+
+**Why Cache-Aside?**
+- File metadata is read-heavy (list files, get info)
+- Writes update DB first, then invalidate cache
+- Eventual consistency is acceptable (brief delay in seeing updates is fine)
+
+
 ### ⚠️ WHO DOES WHAT (Clear Separation - Per Diagram)
 
 ```

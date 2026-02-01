@@ -455,6 +455,17 @@
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
+### Caching Strategy
+
+| Cache | Strategy | Reasoning |
+|-------|----------|-----------|
+| **Feed Cache** | Write-Through | Fanout writes to followers' feeds immediately on post |
+| **Content/User Cache** | Cache-Aside | Read on miss, invalidate on update |
+
+**Why Write-Through for Feed Cache?**
+- Feed must be immediately available when user opens app
+- Fanout service already writes to all followers → naturally write-through
+- Can't afford cache miss on feed (bad UX)
 ---
 
 ## 7. Database Deep-Dive

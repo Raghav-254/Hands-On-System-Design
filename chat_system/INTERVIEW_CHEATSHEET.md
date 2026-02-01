@@ -811,6 +811,15 @@ GET cursor:user123:device456        → 12345
 PUBLISH presence:updates "user123:online"
 ```
 
+**Caching Strategy:**
+
+| Data | Strategy | Reasoning |
+|------|----------|-----------|
+| **Presence** | Write-Through | Status must update instantly (online/offline) |
+| **Session** | Write-Through | Auth needs immediate consistency |
+| **Cursor** | Write-Through | Multi-device sync requires real-time accuracy |
+
+**Why Write-Through for Chat?** Real-time messaging requires immediate consistency - can't serve stale presence or sync data.
 ---
 
 ### 5.4 MYSQL/POSTGRESQL (Relational DB) - Optional

@@ -944,7 +944,12 @@ Based on Alex Xu's System Design Interview - Chapter 14
 ║     Keys:                                                                   ║
 ║       video:metadata:{videoId} → VideoMetadata JSON                        ║
 ║       video:viewcount:{videoId} → Counter (buffered)                       ║
-║       trending:daily → Sorted set                                          ║
+║       trending:daily → Sorted set
+║                                                                               ║
+║     Caching Strategy: Cache-Aside                                          ║
+║       • Read: Check cache → miss → fetch from DB → populate cache          ║
+║       • Write: Update DB → invalidate cache                                ║
+║       • Why? Read-heavy (millions watch, few upload), eventual consistency ok ║ 
 ║                                                                               ║
 ║  3. ORIGINAL STORAGE (S3 / Blob Storage)                                   ║
 ║     ─────────────────────────────────────                                   ║
