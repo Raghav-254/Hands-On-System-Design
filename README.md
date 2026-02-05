@@ -16,6 +16,7 @@ This repository contains hands-on implementations of popular system design probl
 | 4 | [Video Streaming System](./video_streaming_system/) | YouTube-like video platform | Pre-signed URL, DAG Pipeline, CDN, Adaptive Bitrate | [View](./video_streaming_system/INTERVIEW_CHEATSHEET.md) |
 | 5 | [Google Drive System](./google_drive_system/) | Dropbox/Google Drive file sync | Block Server, Delta Sync, Deduplication, Versioning | [View](./google_drive_system/INTERVIEW_CHEATSHEET.md) |
 | 6 | [Proximity Service](./proximity_service/) | Yelp/Google Maps nearby search | Geohash, QuadTree, Spatial Indexing, LBS | [View](./proximity_service/INTERVIEW_CHEATSHEET.md) |
+| 7 | [Nearby Friends System](./nearby_friends_system/) | Find My Friends/Life360 location sharing | WebSocket, Redis Pub/Sub, Real-time, Geohash Optimization | [View](./nearby_friends_system/INTERVIEW_CHEATSHEET.md) |
 
 ### 📖 Database Fundamentals
 
@@ -92,6 +93,12 @@ QuadTree: Hierarchical 4-way split → in-memory search
 ```
 **Used in:** Nearby search, Maps, Delivery apps, Ride sharing
 
+### Pattern 8: Real-time Updates (Pub/Sub)
+```
+Publisher → Redis Pub/Sub (channels) → Subscribers → WebSocket → Clients
+```
+**Used in:** Location sharing, Live updates, Notifications, Multiplayer games
+
 ---
 
 ## 📂 Repository Structure
@@ -141,6 +148,11 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── nearby_friends_system/       ← Nearby Friends (Find My Friends)
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
 ├── (url_shortener)/             ← Coming soon
 └── ...
@@ -158,6 +170,7 @@ Hands on System Design/
 | Video Streaming | Pre-signed URL, DAG Pipeline, CDN, Adaptive Bitrate | ✅ Complete |
 | Google Drive | Block Server, Delta Sync, Deduplication, Versioning | ✅ Complete |
 | Proximity Service | Geohash, QuadTree, Spatial Indexing, LBS | ✅ Complete |
+| Nearby Friends System | WebSocket, Redis Pub/Sub, Real-time, Geohash Optimization | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
 | URL Shortener | Base62 encoding, Caching, Analytics, Redirection | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
