@@ -20,6 +20,7 @@ This repository contains hands-on implementations of popular system design probl
 | 8 | [Google Maps System](./google_maps_system/) | Google Maps navigation & map rendering | Map Tiles, Routing Tiles, CDN, Kafka, ETA, Shortest Path | [View](./google_maps_system/INTERVIEW_CHEATSHEET.md) |
 | 9 | [Distributed Message Queue](./distributed_message_queue/) | Kafka-like message queue system | Topics, Partitions, Consumer Groups, ISR, Replication, ACK Levels | [View](./distributed_message_queue/INTERVIEW_CHEATSHEET.md) |
 | 10 | [Ad Click Aggregation](./ad_click_aggregation_system/) | Ad click event aggregation at scale | MapReduce, Kafka, Watermark, Exactly-Once, Recalculation, Kappa | [View](./ad_click_aggregation_system/INTERVIEW_CHEATSHEET.md) |
+| 11 | [Hotel Reservation](./hotel_reservation_system/) | Hotel booking system at scale | Optimistic Locking, Overbooking, Idempotency, Microservices, Caching | [View](./hotel_reservation_system/INTERVIEW_CHEATSHEET.md) |
 
 ### 📖 Database Fundamentals
 
@@ -171,6 +172,11 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── hotel_reservation_system/   ← Hotel Reservation System
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
 ├── (url_shortener)/             ← Coming soon
 └── ...
@@ -192,6 +198,7 @@ Hands on System Design/
 | Google Maps System | Map Tiles, Routing Tiles, CDN, Kafka, ETA, Shortest Path | ✅ Complete |
 | Distributed Message Queue | Topics, Partitions, Consumer Groups, ISR, Replication | ✅ Complete |
 | Ad Click Aggregation | MapReduce, Kafka, Watermark, Exactly-Once, Recalculation | ✅ Complete |
+| Hotel Reservation | Optimistic Locking, Overbooking, Idempotency, Microservices, Caching | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
 | URL Shortener | Base62 encoding, Caching, Analytics, Redirection | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
