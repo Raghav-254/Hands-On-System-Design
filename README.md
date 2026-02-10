@@ -21,6 +21,7 @@ This repository contains hands-on implementations of popular system design probl
 | 9 | [Distributed Message Queue](./distributed_message_queue/) | Kafka-like message queue system | Topics, Partitions, Consumer Groups, ISR, Replication, ACK Levels | [View](./distributed_message_queue/INTERVIEW_CHEATSHEET.md) |
 | 10 | [Ad Click Aggregation](./ad_click_aggregation_system/) | Ad click event aggregation at scale | MapReduce, Kafka, Watermark, Exactly-Once, Recalculation, Kappa | [View](./ad_click_aggregation_system/INTERVIEW_CHEATSHEET.md) |
 | 11 | [Hotel Reservation](./hotel_reservation_system/) | Hotel booking system at scale | Optimistic Locking, Overbooking, Idempotency, Microservices, Caching | [View](./hotel_reservation_system/INTERVIEW_CHEATSHEET.md) |
+| 12 | [Distributed Email Service](./distributed_email_service/) | Gmail-scale email service | SMTP, Bigtable, Elasticsearch, S3, WebSocket, Deliverability | [View](./distributed_email_service/INTERVIEW_CHEATSHEET.md) |
 
 ### 📖 Database Fundamentals
 
@@ -177,6 +178,11 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── distributed_email_service/  ← Distributed Email Service (Gmail)
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
 ├── (url_shortener)/             ← Coming soon
 └── ...
@@ -199,6 +205,7 @@ Hands on System Design/
 | Distributed Message Queue | Topics, Partitions, Consumer Groups, ISR, Replication | ✅ Complete |
 | Ad Click Aggregation | MapReduce, Kafka, Watermark, Exactly-Once, Recalculation | ✅ Complete |
 | Hotel Reservation | Optimistic Locking, Overbooking, Idempotency, Microservices, Caching | ✅ Complete |
+| Distributed Email Service | SMTP, Bigtable, Elasticsearch, S3, WebSocket, Deliverability | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
 | URL Shortener | Base62 encoding, Caching, Analytics, Redirection | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
