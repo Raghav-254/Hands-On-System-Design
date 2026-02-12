@@ -22,6 +22,7 @@ This repository contains hands-on implementations of popular system design probl
 | 10 | [Ad Click Aggregation](./ad_click_aggregation_system/) | Ad click event aggregation at scale | MapReduce, Kafka, Watermark, Exactly-Once, Recalculation, Kappa | [View](./ad_click_aggregation_system/INTERVIEW_CHEATSHEET.md) |
 | 11 | [Hotel Reservation](./hotel_reservation_system/) | Hotel booking system at scale | Optimistic Locking, Overbooking, Idempotency, Microservices, Caching | [View](./hotel_reservation_system/INTERVIEW_CHEATSHEET.md) |
 | 12 | [Distributed Email Service](./distributed_email_service/) | Gmail-scale email service | SMTP, Bigtable, Elasticsearch, S3, WebSocket, Deliverability | [View](./distributed_email_service/INTERVIEW_CHEATSHEET.md) |
+| 13 | [S3 Object Storage](./s3_object_storage_system/) | S3-like object storage system | Data Store, Metadata Store, Erasure Coding, Replication, Versioning | [View](./s3_object_storage_system/INTERVIEW_CHEATSHEET.md) |
 
 ### 📖 Database Fundamentals
 
@@ -183,6 +184,11 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── s3_object_storage_system/    ← S3-like Object Storage
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
 ├── (url_shortener)/             ← Coming soon
 └── ...
@@ -206,6 +212,7 @@ Hands on System Design/
 | Ad Click Aggregation | MapReduce, Kafka, Watermark, Exactly-Once, Recalculation | ✅ Complete |
 | Hotel Reservation | Optimistic Locking, Overbooking, Idempotency, Microservices, Caching | ✅ Complete |
 | Distributed Email Service | SMTP, Bigtable, Elasticsearch, S3, WebSocket, Deliverability | ✅ Complete |
+| S3 Object Storage | Data Store, Metadata Store, Erasure Coding, Replication, Versioning | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
 | URL Shortener | Base62 encoding, Caching, Analytics, Redirection | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
