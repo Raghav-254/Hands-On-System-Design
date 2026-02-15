@@ -25,6 +25,7 @@ This repository contains hands-on implementations of popular system design probl
 | 13 | [S3 Object Storage](./s3_object_storage_system/) | S3-like object storage system | Data Store, Metadata Store, Erasure Coding, Replication, Versioning | [View](./s3_object_storage_system/INTERVIEW_CHEATSHEET.md) |
 | 14 | [Real-time Game Leaderboard](./realtime_leaderboard_system/) | Real-time game leaderboard | Redis Sorted Set, Sharding, Tie-breaking, Fault Tolerance, Kafka | [View](./realtime_leaderboard_system/INTERVIEW_CHEATSHEET.md) |
 | 15 | [Payment System](./payment_system/) | E-commerce payment backend | PSP, Double-entry Ledger, Idempotency, Reconciliation, Webhooks | [View](./payment_system/INTERVIEW_CHEATSHEET.md) |
+| 16 | [Digital Wallet](./digital_wallet_system/) | High-performance digital wallet | Event Sourcing, CQRS, Raft Consensus, TCC/Saga, RocksDB | [View](./digital_wallet_system/INTERVIEW_CHEATSHEET.md) |
 
 ### 📖 Database Fundamentals
 
@@ -201,6 +202,11 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── digital_wallet_system/      ← Digital Wallet (Event Sourcing)
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
 ├── (url_shortener)/             ← Coming soon
 └── ...
@@ -227,6 +233,7 @@ Hands on System Design/
 | S3 Object Storage | Data Store, Metadata Store, Erasure Coding, Replication, Versioning | ✅ Complete |
 | Real-time Game Leaderboard | Redis Sorted Set, Sharding, Tie-breaking, Fault Tolerance, Kafka | ✅ Complete |
 | Payment System | PSP, Double-entry Ledger, Idempotency, Reconciliation, Webhooks | ✅ Complete |
+| Digital Wallet | Event Sourcing, CQRS, Raft Consensus, TCC/Saga, RocksDB | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
 | URL Shortener | Base62 encoding, Caching, Analytics, Redirection | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
