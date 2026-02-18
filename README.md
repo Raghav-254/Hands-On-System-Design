@@ -26,6 +26,9 @@ This repository contains hands-on implementations of popular system design probl
 | 14 | [Real-time Game Leaderboard](./realtime_leaderboard_system/) | Real-time game leaderboard | Redis Sorted Set, Sharding, Tie-breaking, Fault Tolerance, Kafka | [View](./realtime_leaderboard_system/INTERVIEW_CHEATSHEET.md) |
 | 15 | [Payment System](./payment_system/) | E-commerce payment backend | PSP, Double-entry Ledger, Idempotency, Reconciliation, Webhooks | [View](./payment_system/INTERVIEW_CHEATSHEET.md) |
 | 16 | [Digital Wallet](./digital_wallet_system/) | High-performance digital wallet | Event Sourcing, CQRS, Raft Consensus, TCC/Saga, RocksDB | [View](./digital_wallet_system/INTERVIEW_CHEATSHEET.md) |
+| 17 | [URL Shortener](./url_shortener_system/) | bit.ly-style short links | Base62, Range Allocation, Cache-First Redirect, Kafka Analytics | [View](./url_shortener_system/INTERVIEW_CHEATSHEET.md) |
+| 18 | [BookMyShow](./bookmyshow_system/) | Ticket booking with seat selection | Seat Hold, Pessimistic Lock, Hold Manager, Transactional Outbox, Kafka | [View](./bookmyshow_system/INTERVIEW_CHEATSHEET.md) |
+| 19 | [Uber](./uber_system/) | Ride-sharing: match, track, trip lifecycle | Redis GEO, Push Matching, Trip State Machine, Transactional Outbox | [View](./uber_system/INTERVIEW_CHEATSHEET.md) |
 
 ### 📖 Database Fundamentals
 
@@ -207,8 +210,22 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── url_shortener_system/       ← URL Shortener (bit.ly)
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
+├── bookmyshow_system/          ← BookMyShow (Ticket Booking)
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
+├── uber_system/                ← Uber (Ride-Sharing)
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
-├── (url_shortener)/             ← Coming soon
 └── ...
 ```
 
@@ -234,8 +251,10 @@ Hands on System Design/
 | Real-time Game Leaderboard | Redis Sorted Set, Sharding, Tie-breaking, Fault Tolerance, Kafka | ✅ Complete |
 | Payment System | PSP, Double-entry Ledger, Idempotency, Reconciliation, Webhooks | ✅ Complete |
 | Digital Wallet | Event Sourcing, CQRS, Raft Consensus, TCC/Saga, RocksDB | ✅ Complete |
+| URL Shortener | Base62, Range Allocation, Cache-First Redirect, Kafka Analytics | ✅ Complete |
+| BookMyShow | Seat Hold, Pessimistic Lock, Hold Manager, Transactional Outbox | ✅ Complete |
+| Uber | Redis GEO, Push Matching, Trip State Machine, Transactional Outbox | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
-| URL Shortener | Base62 encoding, Caching, Analytics, Redirection | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
 | Distributed Cache | Consistent hashing, Eviction, Replication | 📋 Planned |
 | Web Crawler | URL frontier, Politeness, Deduplication | 📋 Planned |
