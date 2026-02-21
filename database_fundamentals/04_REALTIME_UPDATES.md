@@ -1179,6 +1179,21 @@ COMPLETE REAL-TIME PIPELINE:
 
 ---
 
+### Real-World Usage: Outbox + CDC in System Designs
+
+These patterns (Transactional Outbox, CDC, Kafka) appear across multiple system designs in this repository:
+
+| System | What goes in the Outbox? | Downstream consumer |
+|--------|------------------------|---------------------|
+| [Splitwise](../splitwise_system/INTERVIEW_CHEATSHEET.md) | `EXPENSE_ADDED`, `SETTLED_UP` events | Push notifications, activity feed |
+| [Uber](../uber_system/INTERVIEW_CHEATSHEET.md) | `TRIP_CREATED`, `TRIP_COMPLETED` events | Billing, analytics, driver payouts |
+| [BookMyShow](../bookmyshow_system/INTERVIEW_CHEATSHEET.md) | `BOOKING_CONFIRMED`, `HOLD_EXPIRED` events | E-ticket generation, notifications, analytics |
+| [Digital Wallet](../digital_wallet_system/INTERVIEW_CHEATSHEET.md) | Uses full Event Sourcing instead — every event IS the source of truth, not just an outbox side-effect |
+
+The core idea is always the same: write the event to the DB in the same transaction as the business data, then a separate process reliably publishes it. This avoids the dual-write problem (DB commit succeeds but Kafka publish fails, or vice versa).
+
+---
+
 ## Next Steps
 
 Continue to **[Level 5: Architectural Mapping](05_ARCHITECTURAL_MAPPING.md)** to learn which database to use for which scenario.
