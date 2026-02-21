@@ -29,6 +29,8 @@ This repository contains hands-on implementations of popular system design probl
 | 17 | [URL Shortener](./url_shortener_system/) | bit.ly-style short links | Base62, Range Allocation, Cache-First Redirect, Kafka Analytics | [View](./url_shortener_system/INTERVIEW_CHEATSHEET.md) |
 | 18 | [BookMyShow](./bookmyshow_system/) | Ticket booking with seat selection | Seat Hold, Pessimistic Lock, Hold Manager, Transactional Outbox, Kafka | [View](./bookmyshow_system/INTERVIEW_CHEATSHEET.md) |
 | 19 | [Uber](./uber_system/) | Ride-sharing: match, track, trip lifecycle | Redis GEO, Push Matching, Trip State Machine, Transactional Outbox | [View](./uber_system/INTERVIEW_CHEATSHEET.md) |
+| 20 | [Splitwise](./splitwise_system/) | Expense splitting & debt simplification | Pairwise Balances, Greedy Simplification, Normalization, Pessimistic Locking | [View](./splitwise_system/INTERVIEW_CHEATSHEET.md) |
+| 21 | [Spotify](./spotify_system/) | Music streaming at scale | Pre-signed CDN URLs, Adaptive Bitrate, Elasticsearch, Collaborative Filtering | [View](./spotify_system/INTERVIEW_CHEATSHEET.md) |
 
 ### 📖 Database Fundamentals
 
@@ -225,6 +227,16 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── splitwise_system/           ← Splitwise (Expense Splitting)
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
+├── spotify_system/             ← Spotify (Music Streaming)
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
 └── ...
 ```
@@ -254,6 +266,8 @@ Hands on System Design/
 | URL Shortener | Base62, Range Allocation, Cache-First Redirect, Kafka Analytics | ✅ Complete |
 | BookMyShow | Seat Hold, Pessimistic Lock, Hold Manager, Transactional Outbox | ✅ Complete |
 | Uber | Redis GEO, Push Matching, Trip State Machine, Transactional Outbox | ✅ Complete |
+| Splitwise | Pairwise Balances, Greedy Simplification, Normalization, Pessimistic Locking | ✅ Complete |
+| Spotify | Pre-signed CDN URLs, Adaptive Bitrate, Elasticsearch, Collaborative Filtering | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
 | Distributed Cache | Consistent hashing, Eviction, Replication | 📋 Planned |
