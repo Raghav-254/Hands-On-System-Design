@@ -31,6 +31,7 @@ This repository contains hands-on implementations of popular system design probl
 | 19 | [Uber](./uber_system/) | Ride-sharing: match, track, trip lifecycle | Redis GEO, Push Matching, Trip State Machine, Transactional Outbox | [View](./uber_system/INTERVIEW_CHEATSHEET.md) |
 | 20 | [Splitwise](./splitwise_system/) | Expense splitting & debt simplification | Pairwise Balances, Greedy Simplification, Normalization, Pessimistic Locking | [View](./splitwise_system/INTERVIEW_CHEATSHEET.md) |
 | 21 | [Spotify](./spotify_system/) | Music streaming at scale | Pre-signed CDN URLs, Adaptive Bitrate, Elasticsearch, Collaborative Filtering | [View](./spotify_system/INTERVIEW_CHEATSHEET.md) |
+| 22 | [Log Aggregation](./log_aggregation_system/) | Centralized logging platform (ELK) | Kafka Buffer, Elasticsearch, Hot/Warm/Cold Tiering, Stream Alerting | [View](./log_aggregation_system/INTERVIEW_CHEATSHEET.md) |
 
 ### 📖 Database Fundamentals
 
@@ -237,6 +238,11 @@ Hands on System Design/
 │   ├── INTERVIEW_CHEATSHEET.md
 │   └── src/...
 │
+├── log_aggregation_system/     ← Log Aggregation (ELK/Splunk)
+│   ├── README.md
+│   ├── INTERVIEW_CHEATSHEET.md
+│   └── src/...
+│
 ├── (rate_limiter)/              ← Coming soon
 └── ...
 ```
@@ -268,6 +274,7 @@ Hands on System Design/
 | Uber | Redis GEO, Push Matching, Trip State Machine, Transactional Outbox | ✅ Complete |
 | Splitwise | Pairwise Balances, Greedy Simplification, Normalization, Pessimistic Locking | ✅ Complete |
 | Spotify | Pre-signed CDN URLs, Adaptive Bitrate, Elasticsearch, Collaborative Filtering | ✅ Complete |
+| Log Aggregation | Kafka Buffer, Elasticsearch, Hot/Warm/Cold Tiering, Stream Alerting | ✅ Complete |
 | Rate Limiter | Token bucket, Sliding window, Redis, Distributed | 📋 Planned |
 | Notification System | Priority queues, Multi-channel, Rate limiting | 📋 Planned |
 | Distributed Cache | Consistent hashing, Eviction, Replication | 📋 Planned |
