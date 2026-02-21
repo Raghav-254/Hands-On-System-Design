@@ -73,7 +73,14 @@
    - [2.9 SQL vs NoSQL: Transaction Support](#29-sql-vs-nosql-transaction--concurrency-support)
    - [2.10 Level 2 → Level 3 Connection](#210-level-2--level-3-connection)
 
-**4. [Interview Checklist](#3-interview-checklist)**
+**4. [Data Modeling: Relationships & Normalization](#3-data-modeling-relationships--normalization)**
+   - [The Three Relationship Types](#the-three-relationship-types)
+   - [Why Many-to-Many Always Needs a Join Table](#why-many-to-many-always-needs-a-join-table)
+   - [What Is a Join Table?](#what-is-a-join-table)
+   - [Normalization vs Denormalization](#normalization-vs-denormalization)
+   - [Modeling Cheatsheet](#modeling-cheatsheet)
+
+**5. [Interview Checklist](#4-interview-checklist)**
    - [Quick Reference: Concurrency Anomalies](#quick-reference-concurrency-anomalies)
    - [Quick Reference: Pessimistic vs Optimistic](#quick-reference-pessimistic-vs-optimistic)
    - [Common Pitfalls](#common-pitfalls)
@@ -3421,7 +3428,101 @@ When multiple transactions run concurrently, bad things can happen. Let's catego
 
 ---
 
-## 3. Interview Checklist
+## 3. Data Modeling: Relationships & Normalization
+
+> This section covers how to model entity relationships in relational databases — a foundational skill for designing schemas in system design interviews.
+
+### The Three Relationship Types
+
+| Relationship | Meaning | How to model | Join table needed? |
+|-------------|---------|-------------|-------------------|
+| **One-to-one** | A user has one profile | FK on either side | No |
+| **One-to-many** | A group has many expenses | FK on the "many" side | No |
+| **Many-to-many** | A user belongs to many groups; a group has many users | Join table with two FKs | **Always required** |
+
+This is true across all relational databases (MySQL, PostgreSQL, Oracle) and all ORMs (Hibernate, Django, ActiveRecord). The ORM might hide the join table with `@ManyToMany`, but under the hood it always creates one.
+
+### Why Many-to-Many Always Needs a Join Table
+
+A relational column holds **one value per row**. So if Alice belongs to 3 groups, where do you put them?
+
+```
+Option A: Put user_id in groups table
+┌──────────┬──────────────┬──────────┐
+│ group_id │ name         │ user_id  │   ← But a group has MANY users...
+├──────────┼──────────────┼──────────┤      so you duplicate the group for each member
+│ g_1      │ Trip to Goa  │ alice    │   ← "Trip to Goa" repeated 3 times!
+│ g_1      │ Trip to Goa  │ bob      │   ← Update group name? Fix all 3 rows.
+│ g_1      │ Trip to Goa  │ charlie  │
+└──────────┴──────────────┴──────────┘
+
+Option B: Put group_id in users table
+┌──────────┬───────┬──────────┐
+│ user_id  │ name  │ group_id │   ← But a user has MANY groups...
+├──────────┼───────┼──────────┤      so you duplicate the user for each group
+│ alice    │ Alice │ g_1      │   ← "Alice" repeated for every group she's in!
+│ alice    │ Alice │ g_2      │
+│ alice    │ Alice │ g_3      │
+└──────────┴───────┴──────────┘
+
+Option C: Comma-separated list ("g_1,g_2,g_3")
+  ❌ Breaks SQL queries (can't JOIN on it)
+  ❌ Breaks indexing (can't index individual values)
+  ❌ Breaks foreign key constraints
+  ❌ Universally considered an anti-pattern
+
+Option D: Join table ✅ — the only correct solution
+┌──────────┬──────────────┐        ┌──────────┬──────────┐
+│ group_id │ name         │        │ group_id │ user_id  │
+├──────────┼──────────────┤        ├──────────┼──────────┤
+│ g_1      │ Trip to Goa  │←──FK──→│ g_1      │ alice    │
+│ g_2      │ Flat Mates   │        │ g_1      │ bob      │
+└──────────┴──────────────┘        │ g_1      │ charlie  │
+   groups (no duplication)         │ g_2      │ alice    │
+                                   └──────────┴──────────┘
+                                   group_members (join table)
+```
+
+### What Is a Join Table?
+
+A **join table** (also called association/bridge table) exists solely to link two entities. On its own, a row like `(group_id=5, user_id=12)` is meaningless — you MUST join it with the parent tables to get useful data. That's why it's called a "join table."
+
+**Quick test**: If a table has only FK columns (and a composite PK of those FKs), it's a join table. If it has its own independent data columns, it's an entity table.
+
+**Join table with payload**: Sometimes a join table carries extra data. For example, `expense_splits(expense_id, user_id, amount)` is a join table for expenses ↔ users, but also stores each user's share. In Hibernate, simple join tables use `@ManyToMany`; join tables with extra columns are modeled as explicit `@Entity` with `@OneToMany` from both sides.
+
+### Normalization vs Denormalization
+
+| Term | What it means | When to use | Example |
+|------|-------------|-------------|---------|
+| **Normalization** | Split tables to eliminate data duplication | Default approach — always start normalized | `expenses` + `expense_splits` instead of one flat table |
+| **Denormalization** | Store precomputed/duplicate data for faster reads | When a derived value is read far more often than written, and the computation is expensive | Storing a `balances` table instead of recomputing from expenses on every read |
+
+**Thumb rules:**
+- **Start normalized.** Split when you see data duplicated across rows.
+- **Denormalize only when reads dominate writes** and the derived computation is expensive (e.g., summing thousands of rows on every page load).
+- **If you denormalize, keep it consistent** — update the precomputed value in the same DB transaction as the source write.
+
+### Modeling Cheatsheet
+
+```
+Step 1: Identify entities (User, Group, Expense, ...)
+Step 2: Identify relationships between them
+Step 3: Apply the rule:
+        ┌─────────────────┬──────────────────────────────────┐
+        │ One-to-one      │ FK on either table               │
+        │ One-to-many     │ FK on the "many" side            │
+        │ Many-to-many    │ Create a join table              │
+        └─────────────────┴──────────────────────────────────┘
+Step 4: Ask "Am I duplicating data?" → If yes, normalize further
+Step 5: Ask "Is a derived query too expensive?" → If yes, denormalize
+```
+
+> **Real-world example**: See the [Splitwise System Design data model](../splitwise_system/INTERVIEW_CHEATSHEET.md) for all three relationship types in action — one-to-many (groups → expenses), many-to-many with pure join table (groups ↔ users via `group_members`), and many-to-many with payload (expenses ↔ users via `expense_splits` with `amount` column). It also demonstrates intentional denormalization with the `balances` table.
+
+---
+
+## 4. Interview Checklist
 
 ### Questions You Should Be Able to Answer
 

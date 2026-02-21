@@ -133,6 +133,18 @@ DB → CDC (Debezium) → Kafka → Worker → Redis Pub/Sub → WebSocket → C
 
 ---
 
+## Data Modeling: Relationships
+
+```
+One-to-one    →  FK on either table          (user → profile)
+One-to-many   →  FK on the "many" side       (group → expenses)
+Many-to-many  →  Join table (ALWAYS needed)  (groups ↔ users → group_members)
+```
+
+> See [Splitwise data model](../splitwise_system/INTERVIEW_CHEATSHEET.md) for a real-world example with all three types + denormalization.
+
+---
+
 ## Common System Design Patterns
 
 ```
