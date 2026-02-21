@@ -41,6 +41,14 @@ This repository contains hands-on implementations of popular system design probl
 
 Covers: **Storage Internals** (B-Tree, LSM-Tree, WAL) → **Database Logic** (Indexing, MVCC, Transactions) → **Distributed Systems** (Replication, Sharding, CAP) → **Real-Time Updates** (CDC, WebSockets) → **Architectural Mapping** (When to use what)
 
+### 🔄 Common Patterns (3-Hour Pre-Interview Revision)
+
+| # | Topic | Description | Quick Reference |
+|---|-------|-------------|-----------------|
+| 🔄 | [Common Patterns](./common_patterns/) | Cross-cutting patterns mapped to all 22 systems — "I used X pattern in Y system because Z" | [3-Hour Plan](./common_patterns/00_3HR_REVISION_PLAN.md) |
+
+Covers: **Scaling** (Caching, CDN, Sharding, Fan-out, Geospatial) → **Consistency** (Locking, Idempotency, Outbox, Saga, State Machine) → **Async** (Kafka, Stream Processing, Exactly-once) → **Storage** (DB Selection, CQRS, Denormalization) → **Real-time & API** (WebSocket, CDC, Pre-signed URLs) → **Reliability** (Retry, Circuit Breaker, Reconciliation)
+
 ---
 
 ## 🎯 How to Use This Repo
@@ -123,7 +131,7 @@ Hands on System Design/
 ├── README.md                    ← You are here (main entry point)
 ├── .gitignore                   ← Git ignore for all projects
 │
-├── database_fundamentals/       ← 📚 DATABASE THEORY DEEP DIVE (NEW!)
+├── database_fundamentals/       ← 📚 DATABASE THEORY DEEP DIVE
 │   ├── README.md                   Master guide overview
 │   ├── 01_STORAGE_INTERNALS.md     B-Tree, LSM-Tree, WAL, Buffer Pool
 │   ├── 02_DATABASE_LOGIC.md        Indexing, MVCC, Transactions
@@ -132,6 +140,15 @@ Hands on System Design/
 │   ├── 05_ARCHITECTURAL_MAPPING.md When to use which database
 │   ├── 06_SENIOR_GOTCHAS.md        Edge cases for Staff+ prep
 │   └── QUICK_REFERENCE_CARD.md     1-page cheatsheet
+│
+├── common_patterns/             ← 🔄 3-HOUR PRE-INTERVIEW REVISION
+│   ├── 00_3HR_REVISION_PLAN.md     Reading schedule + topic map
+│   ├── 01_SCALING_PATTERNS.md      Caching, CDN, Sharding, Fan-out, Geospatial
+│   ├── 02_CONSISTENCY_PATTERNS.md  Locking, Idempotency, Outbox, Saga, State Machine
+│   ├── 03_ASYNC_PATTERNS.md        Kafka, Stream Processing, Exactly-once, Batch
+│   ├── 04_STORAGE_PATTERNS.md      DB Selection, ES, S3, CQRS, Denormalization
+│   ├── 05_REALTIME_AND_API.md      WebSocket, CDC, Pre-signed URLs, Webhooks
+│   └── 06_RELIABILITY_PATTERNS.md  Retry, Circuit Breaker, Reconciliation
 │
 ├── chat_system/                 ← Chat System
 │   ├── README.md
